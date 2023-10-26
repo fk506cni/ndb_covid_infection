@@ -1,0 +1,709 @@
+---
+title: "Ps002_create_whole_db"
+author: "fk506cni"
+date: "2023/2/24"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+
+```{r}
+require(parallel)
+require(data.table)
+require(DBI)
+require(dbplyr)
+require(RPostgreSQL)
+require(tidyverse)
+require(openxlsx)
+require(DT)
+require(tictoc)
+require(jsonlite)
+require(glue)
+
+```
+
+```{r}
+f_l <- "../dat4all/authdat/sec_l.json"
+f_r <- "../dat4all/authdat/sec.json"
+```
+
+
+```{r}
+f2con <- function(f_json){
+  dic <- jsonlite::read_json(f_json)
+  host <- dic$host
+  port <- dic$port
+  user <- dic$user
+  password <- dic$password
+  dbname <- dic$dbname
+  
+  # dic
+  con <- DBI::dbConnect(RPostgres::Postgres(),
+                        host=host,
+                        port=port,
+                        user=user,
+                        password = password,
+                        dbname=dbname)
+  
+  return(con)
+}
+```
+
+dis_code
+```{r}
+f_iy <- "~/dat/tools/20230201/df_sy_master_share_20220922.xlsx"
+f_iyb <- "~/dat/tools/20230201/df_sy_aborted_master_share_20220922.xlsx"
+dfi <- read.xlsx(f_iy) 
+# %>% 
+#   dplyr::filter(pick_check != 0)
+dfia <- read.xlsx(f_iyb)
+# %>% 
+#   mutate(Col4Cat = as.character(Col4Cat),
+#          ICD10_tail = as.character(ICD10_tail))
+# %>% 
+  # dplyr::filter(pick_check != 0)
+# df_y$sy_trans_code
+
+# dfi_lv <- bind_rows(dfi, dfia)
+
+dfi_lv <- dfi %>% 
+  filter(str_detect(sy_base, "肝炎")) %>% 
+  select(sy_code, sy_trans_code) %>% 
+  unlist()
+dfia_lv <- dfia %>% 
+    filter(str_detect(sy_base, "肝炎")) %>% 
+  select(sy_code, sy_trans_code) %>% 
+  unlist()
+
+code_hepatitis <- c(dfi_lv, dfia_lv) %>%
+  .[!is.na(.)]
+  
+
+
+dfi <- dfi %>%
+  dplyr::filter(pick_check != 0)
+dfia <- read.xlsx(f_iyb) %>%
+  dplyr::filter(pick_check != 0)
+dfia %>% dim()
+
+
+
+dfi %>% colnames()
+df_y <- dfi %>% 
+  dplyr::select(one_of(c("Col4Cat",
+                         "pick_check",
+                         "ICD10",
+                         "sy_base",
+                         "sy_code",
+                         "sy_trans_code"))) %>% 
+  dplyr::distinct() 
+discode  <- c(df_y$sy_code, df_y$sy_trans_code, code_hepatitis) %>% 
+  unique()
+
+discode
+```
+
+drug code
+```{r}
+f_y <- "~/dat/tools/20230201/df_y_master_share.xlsx"
+df_y <-read.xlsx(f_y) %>% 
+  dplyr::filter(pick_check != 0) %>% 
+  mutate(iyakuhin_code = as.character(iyakuhin_code)) %>% 
+  mutate(medicine_cd = iyakuhin_code)
+
+drugcode <- df_y$medicine_cd %>% 
+  unique()
+
+drugcode
+```
+
+si adm or o2
+```{r}
+
+
+# f_adm <- "../dat4all/masters/si_adm_master_share_20230210_org.xlsx"
+# df_adm_org <- read.xlsx(f_adm)
+# df_adm_org %>% DT::datatable()
+# 
+# df_adm <- df_adm_org %>% 
+#   filter(pick_check == 1)
+# adm_code <- df_adm$V3
+# 
+# adm_code
+
+
+f_o2 <- "../dat4all/masters/si_o2_master_share_20230206_org.xlsx"
+df_o2_org <-read.xlsx(f_o2) 
+df_o2_org %>% DT::datatable()
+df_o2 <- df_o2_org %>% 
+   filter(pick_check == 1)
+o2_code <- df_o2$V3
+
+
+
+```
+
+si exam
+```{r}
+f_si_whole <- "../../dat/tools/20230227/kikin_si_master_whole_20230223.xlsx"
+df_si <- read.xlsx(f_si_whole) %>% 
+  mutate(kubun_head = V91,
+         kubun_body = V92,
+         kubun_tail = V93) %>% 
+  select(starts_with("kubun"),ymdtag, everything())
+# lab 
+
+df_ex <- df_si %>% 
+  filter(str_detect(V5, "ＳＡＲＳ|核酸多項目同時検出|インフルエンザ|ＲＳウイルス|ポリオ|デング|アデノウイルス"))
+
+#   filter()
+df_ex %>% DT::datatable()
+  
+excode <- df_ex$V3
+
+  
+df_ct <- df_si %>% 
+  filter(str_detect(V5, "ＣＴ")) %>% 
+  filter(kubun_head == "04") %>% 
+  filter(!str_detect(V5, "減算|脳槽|加算|冠動脈|ポジトロン|外傷|ＦＦＲＣＴ"))
+# %>% 
+
+df_ct %>% DT::datatable()
+  # c("160224050")
+# xp/ct
+
+ctcode <- df_ct$V3
+
+
+
+df_adm <- df_si %>% 
+  filter(kubun_head == "02" & kubun_body %in% c("100", "104", "105", "103", "300", "301", "302")) 
+  # filter(!V3 %in% o2_code)
+
+# df_adm_e <- df_adm %>% 
+#   filter(!V3 %in% df_adm_org$V3)
+
+adm_code <- df_adm$V3
+
+adm_code
+```
+
+si codes
+```{r}
+sicode <- c(adm_code, o2_code, excode, ctcode) %>% 
+  unique()
+sicode
+```
+
+
+```{r}
+df_grid <- readRDS("../dat4all/masters/ym_grid.rds") %>% 
+  mutate(ym = as.character(ym))
+df_grid %>% 
+  DT::datatable()
+```
+
+```{r}
+schmss <- c("dpc","med","pha")
+tbls <- c("re", "iy", "si", "sy", "sb","sh", "cz")
+# tbls <- c("re", "iy", "si", "sy", "sb","sh", "cz", "ho")
+# tbls <- c("ho")   
+ex_tag <- c("dpc_sh", "dpc_cz",
+            "med_sb", "med_sh", "med_cz",
+            "pha_si", "pha_sy","pha_sb")
+
+df <- expand_grid(schmss, tbls, ym= df_grid$ym) %>% 
+  mutate(tp ="tnds_t_rcp",
+         topnm = "osr_ndb_user") %>% 
+  mutate(schmsstbls =str_c(schmss, tbls, sep="_")) %>% 
+  mutate(tbnm = str_c(tp, schmss, tbls, sep="_")) %>% 
+  mutate(alltbnm = str_c(topnm, tbnm, sep = ".")) %>% 
+  filter(!schmsstbls %in% ex_tag) %>% 
+  arrange(ym)
+
+df %>% DT::datatable()
+
+# 
+# df <- df %>% filter(tbls =="iy") %>% 
+#   filter(as.numeric(ym) <= 202012) %>% 
+#   arrange(schmss, ym)
+```
+
+
+```{r}
+# erro_df <- readRDS("./error_tnds_t_rcp_dpc_iy_20230301_014739.rds")
+```
+
+
+
+```{r}
+
+qq <- function(qfile, params = NULL, con = NULL){
+  q_read <- qfile %>% 
+    read_file() %>% 
+    str_remove(., "^-- !preview conn=con\n") 
+  # print(q_read)
+  if(is.null(params)){
+    return(q_read)
+  }else{
+    params0 <- list(q_read)
+    # params0$x <- q_read
+    params_bind <- append(params0, params)
+    params_bind$.con <- con
+    
+    print(params_bind)
+    
+    # return(params_bind)
+    do.call(glue_sql, params_bind) %>%
+      return()
+  }
+}
+
+# # sql
+# f_l <- "../dat4all/authdat/sec_l.json"
+# f_r <- "../dat4all/authdat/sec.json"
+# lcon <- f2con(f_l)
+# rcon <- f2con(f_r)
+# 
+# q_f <- "../Ps001_create_schema/queries/select_re.sql"
+# # 
+# arglist <- list()
+# arglist$ym <- "202001"
+# arglist$tbl <- "tnds_t_rcp_dpc_re"
+# arglist$schm <-  "osr_ndb_user"
+# 
+# q_fix <- qq(qfile = q_f, params = arglist, con =rcon)
+# q_fix
+# # glue_sql
+# do.call(glue_sql, q_fix)
+# 
+# q <- "select * from {`tbl`}"
+# 
+# glue_sql(x="-- EXPLAIN \nWith \n\ntbltmp as (\n  --DPC SY\n  SELECT\n    seq1_no\n    ,seq2_no\n    ,id1n\n    ,id2\n    ,sex_div\n    ,age_hier_cd1\n    ,prac_ym\n    FROM {`schm`}.{`tbl`}\n    WHERE prac_ym = {ym}\n    --limit 10000\n)\n\nselect * from tbltmp;",
+#          ym ="202001",
+#          tbl = "tnds_t_rcp_dpc_re",
+#          schm =  "osr_ndb_user",.con = rcon)
+# glue_sql(q,
+#          ym ="202001",
+#          tbl = "tnds_t_rcp_dpc_re",
+#          schm =  "osr_ndb_user",.con = conx)
+# 
+# 
+# f_json <- "../dat4all/authdat/sec.json"
+# dic <- jsonlite::read_json(f_json)
+# 
+# host <- dic$host
+# port <- dic$port
+# user <- dic$user
+# password <- dic$password
+# dbname <- dic$dbname
+# 
+# 
+# conx <- DBI::dbConnect(RPostgres::Postgres(),
+#                       host=host,
+#                       port=port,
+#                       user=user,
+#                       password = password,
+#                       dbname=dbname)
+```
+
+```{r}
+qfa2Ex <- function(f, con, arglist){
+  tic()
+  tb <- arglist$tbl
+  q_fix <- qq(qfile = f, params = arglist, con = con)
+  print(q_fix)
+  
+  dbExecute(conn = con, statement = q_fix)
+  
+  toc()
+}
+```
+
+
+```{r}
+
+# check_col <- function(df, tb, cl){
+#   if()
+# }
+#   
+
+get_ts <- function(){
+  ts <- Sys.time() %>% 
+    as.character() %>% 
+    str_replace_all(" ", "_") %>% 
+    str_replace_all("\\-|:", "")
+  return(ts)
+}
+
+get_ts()
+
+df_filter <- function(df, tb){
+      ##filter
+  
+  error_file <- c("./error_",tb,"_", get_ts(), ".rds") %>% 
+    str_c(collapse = "")
+  if(str_detect(tb, "_si$")){
+    
+    if(! "prac_act_cd" %in% colnames(df)){
+      saveRDS(df, error_file)
+    }else{
+      df <- df %>% 
+        filter(prac_act_cd %in% sicode)
+    }
+    
+  }else if(str_detect(tb, "_iy$")){
+    
+    if(! "medicine_cd" %in% colnames(df)){
+      saveRDS(df, error_file)
+    }else{
+      df <- df %>% 
+        filter(medicine_cd %in% drugcode)
+    }
+    
+  }else if(str_detect(tb, "_sy$|_sb$")){
+    
+    if(! "skwd_name_cd" %in% colnames(df)){
+      saveRDS(df, error_file)
+    }else{
+      df <- df %>% 
+      filter(skwd_name_cd %in% discode)
+    }
+    
+  }
+  
+  return(df)
+}
+
+l_df2psgl <- function(l_df, ym, tb, iternum, con2){
+  df <- l_df %>% 
+        data.table::rbindlist()
+  if(nrow(df) == 0){
+    l <- list()
+    l$ym <- ym
+    l$tbl <- tb
+    l$iter <- iternum
+    
+    log_out(i = iternum, l = l,tag = tb, timing = "error_df")
+  }else{
+    df %>% df_filter(df = ., tb = tb) %>% 
+      DBI::dbAppendTable(conn = con2, name = tb, value = ., append=T)
+
+  }
+  
+  rm(l_df, df)
+  gc(reset = T)
+  gc(reset = T)
+  l_df <- list()
+  return(l_df)
+}
+
+qfa2con2df2con <- function(q_f, con1, arglist, con2){
+  tic()
+  tb <- arglist$tbl
+  ym <- arglist$ym
+  q_fix <- qq(qfile = q_f, params = arglist, con = con1)
+  print(q_fix)
+  res <- dbSendQuery(con1, q_fix)
+  
+  chunksize <- 1e+3
+  iternum <- 1
+  n_row <- 0
+  l_df <- list()
+  
+  while(!dbHasCompleted(res)){
+    if(iternum %% 1250 == 0){
+      print(iternum)
+    }
+    
+    df_i <- dbFetch(res, n = chunksize) %>% 
+      mutate(prac_ym = as.character(prac_ym))
+    n_row <- n_row + nrow(df_i)
+    l_df[[iternum]] <- df_i
+    
+    
+    if(iternum %% 2500 == 0){
+      tic()
+      c("temp_write:", as.character(iternum)) %>% 
+        paste(collapse = "") %>% 
+        print()
+      
+      l_df <- l_df2psgl(l_df = l_df,ym = ym, tb = tb, iternum = iternum, con2 = con2)
+      # l_df %>% 
+      #   data.table::rbindlist() %>% 
+      #   df_filter(df = ., tb = tb) %>% 
+      #   DBI::dbAppendTable(conn = con2, name = tb, value = ., append=T)
+      # 
+      # rm(l_df)
+      # gc(reset = T)
+      # gc(reset = T)
+      # l_df <- list()
+      toc()
+    }
+    
+    iternum <- iternum +1
+  }
+  toc()
+  tic()
+  
+  l_df <- l_df2psgl(l_df = l_df,ym = ym, tb = tb, iternum = iternum, con2 = con2)
+  dbClearResult(res)
+  
+  endcomment <- c("table:", tb, ", ym:",as.character(ym), ", rownumber:", as.character(n_row)) %>% 
+    str_c(collapse ="")
+  
+  print(endcomment)
+  
+  # l_df %>% 
+  #   data.table::rbindlist() %>% 
+  #   df_filter(df = ., tb = tb) %>% 
+  #   DBI::dbAppendTable(conn = con2, name = tb, value = ., append=T)
+  # 
+  # rm(l_df)
+  # gc(reset = T)
+  # gc(reset = T)
+  # toc()
+  return(endcomment)
+}
+
+
+# qfa2con2df2con(q_f = q_f, con1 = rcon , arglist = arglist, con2 = lcon)
+# 
+# 
+# q_fix <- qq(qfile = q_f, params = arglist, con =rcon)
+# q_fix
+
+```
+
+
+```{r}
+# test_l <- list()
+# test_l$a <- "aa"
+# file_i <- paste("./logdir/", as.character(1),"_", get_ts(), ".json")
+# jsonlite::write_json(x = test_l, path = file_i)
+
+# l_test <- list()
+# is.null(l_test[["ym"]])
+log_out <- function(i,l, tag, timing = NULL){
+  if(is.null(l[["ym"]])){
+    ym <- "9999"
+  }else{
+    ym <- l[["ym"]] %>% 
+      as.character()
+  }
+  if(is.null(timing)){
+    timing <- "start"
+  }
+  
+  path_i <- paste("./logdir/","log_",
+                  as.character(i),"_",
+                  timing, "_",
+                  ym, "_" ,
+                  tag,"_",
+                  get_ts(), ".json", collapse = "")
+  jsonlite::write_json(x = l, path = path_i)
+  
+}
+
+  
+# log_out(1, test_l, tag = "aaa")
+```
+
+
+```{r}
+bulkinsert <- function(i){
+  # リテラルをいちいちexportしたくないので関数に突っ込んでしまう。明らかにバッドプラクティス
+  
+  f_l <- "../dat4all/authdat/sec_l.json"
+  f_r <- "../dat4all/authdat/sec.json"
+  lcon <- f2con(f_l)
+  rcon <- f2con(f_r)
+  
+  arglist <- list()
+  f_re <- "../Ps001_create_schema/queries/select_re.sql"
+  f_si <- "../Ps001_create_schema/queries/select_si.sql"
+  f_iy <- "../Ps001_create_schema/queries/select_iy.sql"
+  f_pha_iy <- "../Ps001_create_schema/queries/select_pha_iy.sql"
+  f_sy <- "../Ps001_create_schema/queries/select_sy.sql"
+  f_sb <- "../Ps001_create_schema/queries/select_sb.sql"
+  f_sh <- "../Ps001_create_schema/queries/select_sh.sql"
+  f_cz <- "../Ps001_create_schema/queries/select_cz.sql"
+  # f_ho <- "../Ps001_create_schema/queries/select_ho.sql"
+  
+  ym <- df$ym[[i]]
+  tb <- df$tbnm[[i]]
+  schm <- df$topnm[[i]]
+  
+    if(str_detect(tb, "_re$")){
+      f <- f_re
+    }else if(str_detect(tb, "_si$")){
+      f <- f_si
+    }else if(str_detect(tb, "_iy$")){
+      if(tb == "tnds_t_rcp_pha_iy"){
+        f <- f_pha_iy
+      }else{
+        f <- f_iy
+      }
+    }else if(str_detect(tb, "_sy$")){
+      f <- f_sy
+    }else if(str_detect(tb, "_sb$")){
+      f <- f_sb
+    }else if(str_detect(tb, "_sh$")){
+      f <- f_sh
+    }else if(str_detect(tb, "_cz$")){
+      f <- f_cz
+    # }else if(str_detect(tb, "_ho$")){
+    #   f <- f_ho
+    }else{
+      print("not found.")
+      f <- ""
+    }
+  # arglist$sqlf <- f
+  arglist$ym <- ym
+  arglist$tbl <- tb
+  arglist$schm <- schm
+  
+  log_out(i = i, l = arglist, tag = tb)
+
+  
+  print(f)
+  appendval <- qfa2con2df2con(q_f = f, con1 = rcon, arglist = arglist,con2 = lcon)
+  
+  
+  log_out(i = i, l = arglist, tag = tb, timing = "end")
+  DBI::dbDisconnect(rcon)
+  DBI::dbDisconnect(lcon)
+  
+  gc(reset = T)
+  gc(reset = T)
+  
+  arglist$appendval <- appendval
+  return(arglist)
+}
+
+# arglist
+
+
+# bulkinsert(3)
+```
+
+
+```{r}
+
+tic()
+
+xx <- 1:nrow(df) 
+# %>%
+#   .[1:13]
+cl <- makeCluster(18)
+
+
+clusterEvalQ(cl, {
+  require(data.table)
+  require(DBI)
+  require(RPostgreSQL)
+  require(tidyverse)
+  require(tictoc)
+  require(jsonlite)
+  require(glue)
+
+  })
+
+clusterExport(cl, varlist = c("df", "discode", "drugcode","sicode"), envir = environment())
+clusterExport(cl, varlist = c("f2con", "qfa2Ex", "qq","qfa2con2df2con","get_ts", "df_filter","log_out", "l_df2psgl"), envir = environment())
+clusterExport(cl, varlist = c("bulkinsert"), envir = environment())
+
+clusterEvalQ(cl, bulkinsert)
+res <- parSapplyLB(cl = cl,
+                   X = xx,
+                   FUN = bulkinsert,
+                   simplify = F,
+                   chunk.size = 1)
+stopCluster(cl)
+toc()
+
+
+
+res %>% as.data.frame() %>% 
+  t() %>% 
+  DT::datatable()
+```
+
+
+index
+
+```{r}
+
+tbls <- df$tbnm %>% 
+  unique()
+
+make_index <- function(i){
+  
+  f_l <- "../dat4all/authdat/sec_l.json"
+  lcon <- f2con(f_l)
+  
+  arglist <- list()
+  tbl <- tbls[[i]]
+  arglist$tbl <- tbl
+  
+  log_out(i = i, l = arglist, tag = "index", timing = "start")
+  f <- "../Ps001_create_schema/queries/_create_index.sql"
+  qfa2Ex(f = f, con = lcon,arglist = arglist)
+
+  if(str_detect(tbl, "_re$")){
+    f <- "../Ps001_create_schema/queries/_create_index_id1n.sql"
+    qfa2Ex(f = f, con = lcon,arglist = arglist)
+  }
+  arglist$f <- f
+  log_out(i = i, l = arglist, tag = "index", timing = "end")  
+  return(arglist)
+}
+```
+
+
+```{r}
+tic()
+cl <- makeCluster(14)
+
+clusterExport(cl, varlist = c("df", "discode", "drugcode","sicode","tbls"),envir = environment()) 
+clusterExport(cl, varlist = c("get_ts", "log_out", "f2con", "qfa2Ex", "qq", "make_index"),envir = environment())                              
+                              
+yy <- 1:length(tbls)
+
+clusterEvalQ(cl, {
+  require(data.table)
+  require(DBI)
+  require(RPostgreSQL)
+  require(tidyverse)
+  require(tictoc)
+  require(jsonlite)
+  require(glue)
+
+  
+  })
+clusterEvalQ(cl, make_index)
+res <- parSapplyLB(cl = cl,
+                 X = yy,
+                 FUN = make_index,
+                 simplify = F)
+stopCluster(cl)
+toc()
+
+
+```
+
+analyze
+```{r}
+f_anal <- "../Ps001_create_schema/queries/_analyze_schm.sql"
+f_l
+lcon <- f2con(f_json = f_l)
+qfa2Ex(f = f_anal, con = lcon, arglist = list())
+```
+
+
+
+```{r}
+sessionInfo()
+```
+

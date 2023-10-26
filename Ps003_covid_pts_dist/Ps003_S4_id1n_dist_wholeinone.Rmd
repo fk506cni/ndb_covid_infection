@@ -1,0 +1,160 @@
+---
+title: "Ps003_S4_id1n_dist_wholeinone"
+author: "fk506cni"
+date: "2023/5/22"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+require(tidyverse)
+require(tictoc)
+require(readr)
+```
+
+```{r}
+d_temp <- "/data/temp/"
+fs <- list.files(path = d_temp,pattern = ".rds", full.names = T) %>% 
+  .[sort.list(.)]
+# fs <- fs[1:3]
+fs
+```
+
+
+```{r}
+get_ts <- function(){
+  ts <- Sys.time() %>% 
+    as.character() %>% 
+    str_replace_all(" ", "_") %>% 
+    str_replace_all("\\-|:", "")
+  return(ts)
+}
+
+
+log_out <- function(i,l, tag, timing = NULL){
+  if(is.null(l[["ym"]])){
+    ym <- "9999"
+  }else{
+    ym <- l[["ym"]] %>% 
+      as.character()
+  }
+  if(is.null(timing)){
+    timing <- "start"
+  }
+  
+  path_i <- paste("./logdir/","log_",
+                  as.character(i),"_",
+                  timing, "_",
+                  ym, "_" ,
+                  tag,"_",
+                  get_ts(), ".json", collapse = "")
+  jsonlite::write_json(x = l, path = path_i)
+  
+}
+
+```
+
+```{r}
+gc(reset = T)
+gc(reset = T)
+df_whole <- data.frame()
+tic()
+for(f in fs){
+  
+  tag_i <- f %>% 
+    str_remove(d_temp) %>% 
+    str_remove("/covid_pts_dist_") %>% 
+    str_extract("^[0-9]*") %>% 
+    as.numeric()
+  print(tag_i)
+  log_out(i = tag_i, tag = "covid_pts_tabl", timing = "start", l = list())
+
+  tic()
+  # readRDS(f) %>%
+  df_i <- readr::read_rds(f) %>%
+    mutate(min_ym = tag_i)
+  toc()
+  
+  tic()
+  if(tag_i == 202001){
+    print("first process")
+    df_whole <- bind_rows(df_whole, 
+                        df_i)
+    rm(df_i)
+    gc(reset = T)
+    gc(reset = T)
+  }else{
+    print("second process")
+    
+    # new ids
+    df_new <- df_i %>% 
+      filter(!id1n %in% df_whole$id1n) %>% 
+      mutate(had_covid_bool = 0)
+    # df_new %>% 
+    #   dim() %>% 
+    #   print()
+    
+    # pos ids
+    df_pos <- df_i %>% 
+      filter(had_covid_bool != 0)
+    # df_pos %>%
+    #   dim() %>%
+    #   print()
+    rm(df_i)
+    gc(reset = T)
+    gc(reset = T)
+    # group by stack by size.
+    df_whole <- bind_rows(df_whole,
+                        df_new) %>%
+      mutate(had_covid_bool = ifelse(id1n %in% df_pos$id1n,
+                                     had_covid_bool +1,
+                                     had_covid_bool))
+    
+    # df_whole <- bind_rows(df_whole, 
+    #                     df_i) %>% 
+    #   group_by(id1n) %>% 
+    #   summarise(sex_mean = mean(sex_mean),
+    #             age_hier_cd1_int_min = min(age_hier_cd1_int_min),
+    #             had_covid_bool = sum(had_covid_bool),
+    #             min_ym = min(min_ym))
+    rm(df_new, df_pos)
+    gc(reset = T)
+    gc(reset = T)
+    
+  }
+  log_out(i = tag_i, tag = "covid_pts_tabl", timing = "end", l = list())
+  toc()
+  # df_i %>% 
+  #   dim() %>% 
+  #   print()
+}
+toc()
+
+# df_i %>% head()
+# df_whole %>% head()
+```
+
+```{r}
+# get_ts <- function(){
+#   ts <- Sys.time() %>% 
+#     as.character() %>% 
+#     str_replace_all(" ", "_") %>% 
+#     str_replace_all("\\-|:", "")
+#   return(ts)
+# }
+
+ts <- get_ts()
+f_out <- c("./df_id1_dist_whole_", ts, ".rds") %>% 
+  str_c(collapse = "")
+# f_out <- "./df_id1_dist_whole_.rds"
+f_out
+tic()
+saveRDS(object = df_whole, file = f_out)
+toc()
+```
+
+```{r}
+sessionInfo()
+```
+

@@ -1,0 +1,329 @@
+---
+title: "Ps005_drug_usage_vis"
+author: "fk506cni"
+date: "2023/3/14"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+
+
+```{r}
+require(tidyverse)
+require(openxlsx)
+require(DT)
+require(tictoc)
+require(data.table)
+require(officer)
+require(lubridate)
+require(ggpubr)
+```
+
+```{r}
+outputdir <- "./figs/"
+if(!dir.exists(outputdir)){
+  dir.create(outputdir)
+}
+
+ggsave2_tri <- function(plot, wid = 9, hei=9){
+  plot_name <- deparse(substitute(plot))
+  
+  #png
+  file_name <- paste(outputdir,plot_name, ".png", sep = "",collapse = "")
+  ggsave(filename = file_name,plot = plot,device = "png",width = wid, height = hei,dpi = 300,units = "cm")
+  f2metajson(file_name)
+  
+  # #pdf
+  # file_name <- paste(outputdir,plot_name, ".pdf", sep = "",collapse = "")
+  # ggsave(filename = file_name,plot = plot,device = "pdf",width = wid, height = hei,dpi = 300,units = "cm")
+  # f2metajson(file_name)
+  
+  #pptx
+  file_name <- paste(outputdir,plot_name, ".pptx", sep = "",collapse = "")
+  plot_ed <- rvg::dml(ggobj = plot,width = wid, height = hei)
+  
+  doc <- read_pptx() %>%
+    add_slide('Title and Content', 'Office Theme') %>%
+    ph_with(value = "", location = ph_location_type(type = "title")) %>%
+    ph_with(value = plot_ed, location = ph_location(type = "body",width = cm2inch(wid), height = cm2inch(hei),left = 2, top = 2))
+  doc %>%
+    print(target = file_name)
+  f2metajson(file_name)
+  
+}
+
+
+
+inch2cm <- function(x){
+  return(x/0.39370)
+}
+cm2inch <- function(x){
+  return(0.39370*x)
+}
+
+p2cm <- function(x){
+  return(as.integer(0.008466666666666667 * x))
+}
+
+cm2p <- function(x){
+  return(as.integer(118.11023622047244 *x))
+}
+
+sv2ggkm <- function(svfit){
+  p <- ggsurvplot(fit = svfit, data = df,
+                risk.table.title = "risk.table.title", risk.table.y.text.col = TRUE,
+           risk.table.y.text = FALSE, fontsize = 5,
+           risk.table = TRUE, tables.theme = theme_pubr(), ggtheme = theme_pubr())
+  p_km <- p$plot
+  p_tb <- p$table
+  p2 <- cowplot::plot_grid(p_km, p_tb, ncol = 1,align = "v", rel_heights = c(3,1))
+  grid::grid.draw(p2)
+  return(p2)
+}
+
+
+f2metajson <- function(f){
+  l <- file.info(f) %>% as.list()
+  l2 <- list()
+  
+  l2 <- list()
+  l_names <- names(l)
+  
+  for (i in 1:length(l)){
+    if(l_names[i] %in% c("uid", "gid", "mode", "uname", "grname")){
+      # print(l_names[i])
+    }else{
+      if("POSIXct" %in% class(l[[i]])){
+        l2[[l_names[i]]] <- l[[i]] %>% 
+          lubridate::ymd_hms() %>% 
+          as.character()
+      }else{
+        l2[[l_names[i]]] <- as.character(l[[i]])
+      }
+    }
+  }
+  
+  l2$f <- f
+  l2$md5 <- f %>% 
+    file(.,open = "rb") %>% 
+    openssl::md5() %>% 
+    as.character() %>% 
+    as.character()
+  l2$sha256 <- f %>% 
+    file(.,open = "rb") %>% 
+    openssl::sha256() %>% 
+    as.character() %>% 
+    as.character()
+  print(l2)
+  f_json <- paste(f, ".json", sep="", collapse = "")
+  jsonlite::write_json(x = l2, path = f_json, pretty=T, auto_unbox=T)
+  # return(l2)
+  # # jsonlite::write_json(x = l2, path = f_json)
+}
+
+get_ts <- function(){
+  ts <- Sys.time() %>% 
+    as.character() %>% 
+    str_replace_all(" ", "_") %>% 
+    str_replace_all("\\-|:", "")
+  return(ts)
+}
+
+```
+
+```{r}
+ts <- get_ts()
+ts
+```
+
+
+
+```{r}
+# f_rds <- "./covid_drug_res_20230311_034944.rds"
+# f_rds <- "./covid_drug_res_20230607_063834.rds"
+f_rds <- "./covid_drug_res_20230627_190438.rds"
+df <- readRDS(f_rds) %>% 
+  bind_rows()
+# %>%
+
+df %>% colnames() %>% 
+  str_c(collapse = ",")
+# df <- df %>% 
+#   tidyr::complete(age_grade,
+#                   had_covid_whole,
+#                   had_adm_gen_whole,had_adm_men_whole,had_adm_unit_ad_whole,had_adm_unit_man_whole,had_adm_unit_whole,
+#                   had_o2_whole,had_int_whole,had_ecmo_whole,
+#                   yms, 
+#                   fill = list(n_id1n = 0))
+
+```
+
+抗凝固薬（低分子ヘパリン）15_ダルテパリンNa_5000IU to  
+抗凝固薬（低分子ヘパリン）11_ダルテパリンNa_5000IU
+```{r}
+f_iy_mst <- "../dat4all/masters/df_y_master_share.xlsx"
+df_ymst <- read.xlsx(f_iy_mst) %>% 
+  filter(pick_check!=0) %>% 
+  mutate(iyakuhin_code = as.character(iyakuhin_code)) %>% 
+  mutate(medicine_cd = iyakuhin_code) %>% 
+  mutate(Col4Cat = str_replace(Col4Cat, "抗凝固薬（低分子ヘパリン）15_ダルテパリンNa_5000IU","抗凝固薬（低分子ヘパリン）11_ダルテパリンNa_5000IU"))
+
+df_ymst$drug_unit_jp %>% 
+  table()
+drug_prs <- df_ymst %>% 
+  filter(drug_unit_jp %in% 	c("錠")) %>% 
+  .[["medicine_cd"]] %>% 
+  unique()
+drug_inj <- df_ymst %>% 
+  filter(!drug_unit_jp %in% 	c("錠")) %>% 
+  .[["medicine_cd"]] %>% 
+  unique()
+# df_y <- 
+
+```
+
+```{r}
+# colnames(df_drg)
+df_drg <- df %>% 
+  dplyr::left_join(df_ymst, by="medicine_cd") %>% 
+  group_by(Col4Cat, yms,digit4, had_covid) %>% 
+  summarise(sum_total_amnt_cat = sum(sum_total_amnt) %>% 
+              as.numeric()) %>% 
+  mutate(mid_ym = str_c(yms, "15", sep="") %>% 
+             lubridate::ymd()) %>% 
+  mutate(is_inj = str_detect(Col4Cat, "ステロイド") & str_detect(Col4Cat, "注射"),
+         is_orl = str_detect(Col4Cat, "ステロイド") & str_detect(Col4Cat, "内服"),
+         is_lmol = str_detect(Col4Cat, "ヘパリン") & str_detect(Col4Cat, "低分子"),
+         is_nmol = str_detect(Col4Cat, "ヘパリン") & str_detect(Col4Cat, "未分画")
+         ) %>% 
+  mutate(Col4Cat2 = Col4Cat %>% 
+           str_remove_all("ステロイド|（注射）|（内服）|抗凝固薬（低分子ヘパリン）|抗凝固薬（未分画ヘパリン）|鎮静薬（|）|抗ウイルス薬（|ステロイド（内服）|ステロイド（注射）") %>% 
+           str_remove("^[0-9]*_") %>% 
+           str_replace("単位", "U")) %>% 
+  mutate(digit4f = case_when(
+    is_inj ~ str_c(digit4, "inj", sep="_"),
+    is_orl  ~ str_c(digit4, "orl", sep="_"),
+    is_lmol  ~ str_c(digit4, "lmol", sep="_"),
+    is_nmol  ~ str_c(digit4, "nmol", sep="_"),
+    T ~ digit4
+  ))
+
+
+# df_drg$Col4Cat2 %>% unique()
+# df_drg
+l_categ <- df_drg$digit4f %>%
+  unique()
+# l_categ
+```
+
+```{r}
+res_l <- list()
+for(ctg in l_categ){
+  print(ctg)
+  dfx <- df_drg %>% 
+    dplyr::filter(digit4f == ctg) %>% 
+    mutate(mid_ym = str_c(yms, "15", sep="") %>% 
+             lubridate::ymd()) %>% 
+    mutate(categ_inf = ifelse(had_covid ==1, 
+                          "rece_id_with_covid_diagnosis",
+                          "rece_id_without_covid")) 
+  
+  px <- ggplot()+
+    theme_pubr(legend = "right")+
+      geom_line(data = dfx,
+            aes(x = mid_ym, y = sum_total_amnt_cat, color=Col4Cat2))+
+    facet_wrap(~ categ_inf, ncol = 1)+
+    ylab("")+xlab("")+
+    coord_cartesian(xlim = c(lubridate::ymd("2020-01-15"),lubridate::ymd("2022-12-15")))
+  # grid::grid.draw(px)
+  res_l[[ctg]] <- px
+}
+
+# lubridate::ymd("2020-01-15")
+# lubridate::ymd("2022-12-15")
+```
+
+```{r}
+# l_categ
+```
+
+
+```{r}
+require(cowplot)
+l_categ2 <- c("",l_categ[[1]], "", l_categ[[2]], "", l_categ[[3]], "", l_categ[[4]], "", l_categ[[5]],"", l_categ[[6]],"", l_categ[[7]])
+
+p4_drg <- cowplot::plot_grid(NULL,
+                            res_l$`2454_inj`,
+                            NULL,
+                            res_l$`2454_orl`,
+                            NULL,
+                            res_l$`6250`,
+                            NULL,
+                            res_l$`3334_lmol`,
+                            NULL,
+                            res_l$`3334_nmol`,
+                            NULL,
+                            res_l$`1119`,
+                            NULL,
+                            res_l$`1124`,
+                            ncol = 1,align = "v",
+                         labels = l_categ2, label_fontfamily = "serif", 
+                         label_x = 0,hjust = 0,
+                         vjust = 0.2,
+                         rel_heights = c(0.05,1,0.05,1,0.05,1,0.05,1,0.05,1,0.05,1,0.05,1)
+                         )
+# p4_drg
+# warnings()
+ggsave2_tri(plot = p4_drg, wid = 22, hei = 45)
+
+
+```
+
+
+```{r}
+w1 <- 18
+h1 <- 12
+
+p_str_inj <- res_l$`2454_inj` +
+  xlab("time")+ylab("DrugUnit")
+ggsave2_tri(plot = p_str_inj, wid = w1, hei = h1)
+
+p_str_orl <- res_l$`2454_orl` +
+  xlab("time")+ylab("DrugUnit")
+ggsave2_tri(plot = p_str_orl, wid = w1, hei = h1)
+
+
+p_vir <- res_l$`6250`
+ggsave2_tri(plot = p_vir, wid = w1, hei = h1)
+
+p_hep_lmol <- res_l$`3334_lmol`
+ggsave2_tri(plot = p_hep_lmol, wid = w1, hei = h1)
+
+p_hep_nmol <- res_l$`3334_nmol`
+ggsave2_tri(plot = p_hep_nmol, wid = w1, hei = h1)
+
+p_pro <- res_l$`1119`
+ggsave2_tri(plot = p_pro, wid = 18, hei = 12)
+
+p_mid <- res_l$`1124`
+ggsave2_tri(plot = p_mid, wid = 18, hei = 12)
+
+```
+
+```{r}
+
+df_drg4out <- df_drg %>% 
+  mutate(sum_total_amnt_cat = if_else(0 < sum_total_amnt_cat & sum_total_amnt_cat < 10, "1~9", as.character(sum_total_amnt_cat)))
+f_drg <- c("./drug_whole_", ts, ".csv") %>% 
+  str_c(. ,sep = "", collapse = "")
+f_drg
+
+write.csv(df_drg4out, f_drg, row.names = T, quote = T)
+```
+
+
+```{r}
+sessionInfo()
+```
+

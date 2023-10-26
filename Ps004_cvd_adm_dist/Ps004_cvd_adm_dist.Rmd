@@ -1,0 +1,438 @@
+---
+author: "fk506cni"
+date: "2023/2/2"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+require(DBI)
+require(dbplyr)
+require(RPostgreSQL)
+require(tidyverse)
+require(openxlsx)
+require(DT)
+require(tictoc)
+require(jsonlite)
+require(glue)
+require(parallel)
+```
+
+```{r}
+f_l <- "../dat4all/authdat/sec_l.json"
+# f_r <- "../dat4all/authdat/sec.json"
+```
+
+```{r}
+f2con <- function(f_json){
+  dic <- jsonlite::read_json(f_json)
+  host <- dic$host
+  port <- dic$port
+  user <- dic$user
+  password <- dic$password
+  dbname <- dic$dbname
+  
+  # dic
+  con <- DBI::dbConnect(RPostgres::Postgres(),
+                        host=host,
+                        port=port,
+                        user=user,
+                        password = password,
+                        dbname=dbname)
+  
+  return(con)
+}
+
+con <- f2con(f_l)
+```
+
+
+```{r}
+f_iy <- "~/dat/tools/20230201/df_sy_master_share_20220922.xlsx"
+f_iyb <- "~/dat/tools/20230201/df_sy_aborted_master_share_20220922.xlsx"
+dfi <- read.xlsx(f_iy) %>% 
+  dplyr::filter(pick_check != 0)
+dfia <- read.xlsx(f_iyb) %>% 
+  dplyr::filter(pick_check != 0)
+
+dfia %>% dim()
+
+dfi %>% colnames()
+df_y <- dfi %>% 
+  dplyr::select(one_of(c("Col4Cat",
+                         "pick_check",
+                         "ICD10",
+                         "sy_base",
+                         "sy_code",
+                         "sy_trans_code"))) %>% 
+  dplyr::distinct() %>% 
+  filter(str_detect(Col4Cat,"コロナウイルス")) %>% 
+  filter(ICD10 =="U071")
+
+discode  <- c(df_y$sy_code, df_y$sy_trans_code) %>% 
+  unique()
+
+discode
+```
+
+
+```{r}
+# f_q <- "./re_sy_02.sql"
+
+qq <- function(qfile, params = NULL, con = NULL){
+  q_read <- qfile %>% 
+    read_file() %>% 
+    str_remove(., "^-- !preview conn=con\n") 
+  if(is.null(params)){
+    return(q_read)
+  }else{
+    params0 <- list(q_read)
+    params_bind <- append(params0, params)
+    params_bind$.con = con
+    print(params_bind)
+    do.call(glue_sql, params_bind) %>% 
+    # glue_sql(q_read, .x= params,.con= con) %>% 
+      return()
+  }
+}
+# # read_file(f_q) %>% 
+# #   str_remove(., "^-- !preview conn=con\n")
+# 
+# # qq(f_q)
+# q_fix <- qq(qfile = f_q, params = arglist, con = con)
+```
+
+```{r}
+qfa2df <- function(q_f, arglist, con){
+  tic()
+  q_fix <- qq(qfile = q_f, params = arglist, con = con)
+  print(q_fix)
+  res <- dbSendQuery(con, q_fix)
+  
+  df_0 <- data.frame()
+  l_df <- list()
+  chunksize <- 1e+4
+  iternum <- 1
+  while(!dbHasCompleted(res)){
+    if(iternum %% 50 == 0){
+      print(iternum)
+    }
+    df_i <- dbFetch(res, n = chunksize)
+    # df_0 <- bind_rows(df_0, df_i)
+    l_df[[iternum]] <- df_i
+    # # l_df <- append(l_df, df_i)
+    iternum <- iternum +1
+  }
+  dbClearResult(res)
+  toc()
+  
+  # l_df <- bind_rows(l_df)
+  l_df_ <- data.table::rbindlist(l_df)
+  
+  l_df_ %>% 
+    dim() %>% 
+    print()
+  return(l_df_)
+}
+```
+
+
+```{r}
+qfa2Ex <- function(f, con, arglist){
+  tic()
+  tb <- arglist$tbl
+  q_fix <- qq(qfile = f, params = arglist, con = con)
+  print(q_fix)
+  
+  dbExecute(conn = con, statement = q_fix)
+  
+  toc()
+}
+
+get_ts <- function(){
+  ts <- Sys.time() %>% 
+    as.character() %>% 
+    str_replace_all(" ", "_") %>% 
+    str_replace_all("\\-|:", "")
+  return(ts)
+}
+
+```
+
+
+```{r}
+f_o2 <- "../dat4all/masters/si_o2_master_share_20230206_org.xlsx"
+df_o2 <-read.xlsx(f_o2)
+df_o2 %>% 
+  DT::datatable()
+o2_code  <- df_o2 %>% 
+  filter(pick_check == 1) %>% 
+  filter(Col4Cat %in% c("酸素吸入", "酸素テント", "間歇的陽圧吸入法", "インキュベーター")) %>% 
+  .[["V3"]] %>% 
+  as.integer() %>% 
+  unique()
+
+int_code <- df_o2 %>% 
+  filter(pick_check == 1) %>% 
+  filter(Col4Cat %in% c("人工呼吸")) %>% 
+  .[["V3"]] %>% 
+  as.integer() %>% 
+  unique()
+
+ecmo_code <- df_o2 %>% 
+  filter(pick_check == 1) %>% 
+  filter(Col4Cat %in% c("経皮的心肺補助法")) %>% 
+  .[["V3"]] %>% 
+  as.integer() %>% 
+  unique()
+```
+
+```{r}
+# f_adm <- "../dat4all/masters/si_adm_master_share_20230210_org.xlsx"
+f_adm <- "../dat4all/masters/kikin_si_master_whole_20230223.xlsx"
+df_adm <- read.xlsx(f_adm) %>% 
+  dplyr::select(V91, V92, V93, V5, everything()) %>% 
+  filter(V91 %in% c("02"))
+# df_adm %>%
+#   DT::datatable()
+
+df_adm_gen <- df_adm %>% 
+  filter(V91 == "02" & V92 == "100" |
+         V91 == "02" & V92 == "104" |
+         V91 == "02" & V92 == "105" )  %>% 
+  filter(!str_detect(V5, "看護配置|加算|指導|減算|外泊|減額")) 
+
+adm_gen <- df_adm_gen %>%
+  .[["V3"]] %>%
+  as.integer() %>%
+  unique()
+
+ 
+df_adm_men <- df_adm %>% 
+  filter(V91 == "02" & V92 == "103") %>% 
+  filter(!str_detect(V5, "看護配置|加算|指導|減算|外泊|減額")) 
+
+adm_men <- df_adm_men %>%
+  .[["V3"]] %>%
+  as.integer() %>%
+  unique()
+
+df_adm_unt <- df_adm %>% 
+  filter(V91 == "02" & V92 == "300" |
+         V91 == "02" & V92 == "301" |
+         V91 == "02" & V92 == "302" ) %>% 
+  filter(!str_detect(V5, "看護配置|加算|指導|減算|外泊|減額")) 
+  # df_adm %>% 
+  # filter(pick_check == 1) %>% 
+  # filter(Col4Cat %in% c("ICU入院")) %>% 
+  # filter(!str_detect(V5, "看護配置|加算|指導|上限延長|診療報酬上臨時的取扱"))
+
+adm_unt_ad <- df_adm_unt %>% 
+  filter(str_detect(V5, "入院料")) %>% 
+  .[["V3"]] %>%
+  as.integer() %>%
+  unique()
+
+
+adm_unt_man <- df_adm_unt %>% 
+  filter(!str_detect(V5, "入院料")) %>% 
+  .[["V3"]] %>%
+  as.integer() %>%
+  unique()
+
+
+
+  # filter(!str_detect(V5, "看護配置|加算|指導|１５～３０日以内|１５～２１日|１５日以上２１日以内|３１～３５日以内|上限延長|１５日以上３０日以内|３１日以上|１５日～６０日|３１～６０日以内|３１～９０日以内|４～７日|８～１４日８日以上|診療報酬上臨時的取扱|４日以上７日以内|８～１４日８日以上|８日以上|８～１４日|４日～７日|８日～１４日|３１～９０日|８日～６０日|１５～３０日|３１日～６０日|３１日～３５日|１５日～")) %>% 
+  # .[["V3"]] %>%
+  
+```
+
+```{r}
+df_grid <- readRDS("../dat4all/masters/ym_grid.rds") %>% 
+  mutate(ym = as.character(ym))
+df_grid %>% 
+  DT::datatable()
+```
+
+
+
+
+```{r}
+tic()
+arglist <- list()
+arglist$discode <- discode %>% 
+  str_c(collapse =  "','")
+
+# adm_gen <- c(190131570,190134970)
+# adm_men <- c(190118570, 190143470)
+# adm_unt <- c(190117310,190175010)
+# o2_code <- c(140005610)
+# int_code <- c(140009310)
+# ecmo_code <- c(150262910)
+# adm_mem
+
+arglist$adm_gen <- adm_gen %>% 
+  str_c(collapse =  "','")
+
+arglist$adm_men <- adm_men %>% 
+  str_c(collapse =  "','")
+
+arglist$adm_unt_ad <- adm_unt_ad  %>% 
+  str_c(collapse =  "','")
+arglist$adm_unt_man <- adm_unt_man  %>% 
+  str_c(collapse =  "','")
+
+arglist$o2_code <- o2_code %>% 
+  str_c(collapse =  "','")
+arglist$int_code <- int_code %>% 
+  str_c(collapse =  "','")
+arglist$ecmo_code <- ecmo_code %>% 
+  str_c(collapse =  "','")
+
+yms <- df_grid$ym 
+
+# f_ <- "./queries/o2_si_tabl_covid_01_wo_adm.sql"
+# f_ <- "./queries/o2_adm_si_tabl_covid_cdsk.sql"
+f_ <- "./queries/o2_adm_si_tabl_covid_cd.sql"
+# %>% 
+#   .[14:14]
+
+
+tic()
+# df_whole <- data.frame()
+# for (ym_i in yms){
+#   arglist$ym <- ym_i
+#   ym_i %>% 
+#     print()
+#   df_ym_i <-  qfa2df(q_f = f, arglist = arglist)
+#   df_ym_i <- df_ym_i %>%
+#       mutate(yms = ym_i,
+#              file = f)
+#   df_whole <- bind_rows(df_whole,
+#                           df_ym_i)
+# 
+#   # break()
+# }
+toc()
+
+arglist
+```
+
+```{r}
+f_pick_dis <- "./queries/pick_dis_func.sql"
+qfa2Ex(f = f_pick_dis, con = con, arglist = arglist)
+
+f_pick_si <- "./queries/pick_si_func.sql"
+qfa2Ex(f = f_pick_si, con = con, arglist = arglist)
+
+f_pick_cd <- "./queries/pick_cd_func.sql"
+qfa2Ex(f = f_pick_cd, con = con, arglist = arglist)
+```
+
+
+```{r}
+# arglist
+# arglist$ym <- "202201"
+# df_test <- qfa2df(q_f = "./queries/o2_adm_si_tabl_covid_cd.sql", con = con, arglist = arglist)
+```
+
+
+```{r}
+
+log_out <- function(i,l, tag, timing = NULL){
+  if(is.null(l[["ym"]])){
+    ym <- "9999"
+  }else{
+    ym <- l[["ym"]] %>% 
+      as.character()
+  }
+  if(is.null(timing)){
+    timing <- "start"
+  }
+  
+  path_i <- paste("./logdir/","log_",
+                  as.character(i),"_",
+                  timing, "_",
+                  ym, "_" ,
+                  tag,"_",
+                  get_ts(), ".json", collapse = "")
+  jsonlite::write_json(x = l, path = path_i)
+  
+}
+
+
+get_tabl <- function(i){
+  f_l <- "../dat4all/authdat/sec_l.json"
+  con <- f2con(f_json = f_l)
+  
+  ym <- yms[[i]]
+  print(ym)
+  arglist$ym <- ym
+  log_out(i = i, l = arglist, tag = "covid_dis")
+  df_ym_i <-  qfa2df(q_f = f_, arglist = arglist, con = con)
+  df_ym_i <- df_ym_i %>%
+      mutate(yms = ym,
+             file = f_)
+  
+  log_out(i = i, l = arglist, tag = "covid_dis", timing = "end")
+  return(df_ym_i)
+}
+# 
+```
+
+```{r}
+# tic()
+# res <- get_tabl(1)
+# toc()
+# res
+
+```
+
+```{r}
+tic()
+
+cl <- makeCluster(2)
+
+clusterExport(cl, varlist = c("yms","discode", "arglist", "f_"),envir = environment())
+clusterExport(cl, varlist = c("get_ts", "log_out", "f2con", "qfa2Ex", "qq","qfa2df", "get_tabl"),envir = environment())                              
+                              
+yy <- 1:length(yms) 
+# %>%
+#   .[1:2]
+
+clusterEvalQ(cl, {
+  require(data.table)
+  require(DBI)
+  require(RPostgreSQL)
+  require(tidyverse)
+  require(tictoc)
+  require(jsonlite)
+  require(glue)
+
+  
+  })
+clusterEvalQ(cl, get_tabl)
+res <- parSapplyLB(cl = cl,
+                 X = yy,
+                 FUN = get_tabl,
+                 simplify = F,chunk.size = 1)
+stopCluster(cl)
+toc()
+```
+
+
+
+```{r}
+f_out <- c("./covid_adm_si_res_",get_ts(), ".rds") %>% 
+  str_c(., collapse = "")
+f_out
+res %>% 
+  saveRDS(object = ., file = f_out)
+```
+
+
+```{r}
+sessionInfo()
+```
+

@@ -1,0 +1,440 @@
+---
+title: "Ps004_cvd_adm_dist_vis"
+author: "fk506cni"
+date: "2023/3/9"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+
+```{r}
+require(tidyverse)
+require(openxlsx)
+require(DT)
+require(tictoc)
+require(data.table)
+require(officer)
+require(lubridate)
+require(ggpubr)
+
+require(openssl)
+require(jsonlite)
+```
+
+```{r}
+outputdir <- "./figs/"
+if(!dir.exists(outputdir)){
+  dir.create(outputdir)
+}
+
+ggsave2_tri <- function(plot, wid = 9, hei=9){
+  plot_name <- deparse(substitute(plot))
+  
+  #png
+  file_name <- paste(outputdir,plot_name, ".png", sep = "",collapse = "")
+  ggsave(filename = file_name,plot = plot,device = "png",width = wid, height = hei,dpi = 300,units = "cm")
+  f2metajson(file_name)
+  
+  # #pdf
+  # file_name <- paste(outputdir,plot_name, ".pdf", sep = "",collapse = "")
+  # ggsave(filename = file_name,plot = plot,device = "pdf",width = wid, height = hei,dpi = 300,units = "cm")
+  # f2metajson(file_name)
+  # 
+  #pptx
+  file_name <- paste(outputdir,plot_name, ".pptx", sep = "",collapse = "")
+  plot_ed <- rvg::dml(ggobj = plot,width = wid, height = hei)
+  
+  doc <- read_pptx() %>%
+    add_slide('Title and Content', 'Office Theme') %>%
+    ph_with(value = "", location = ph_location_type(type = "title")) %>%
+    ph_with(value = plot_ed, location = ph_location(type = "body",width = cm2inch(wid), height = cm2inch(hei),left = 2, top = 2))
+  doc %>%
+    print(target = file_name)
+  f2metajson(file_name)
+  
+}
+
+
+
+inch2cm <- function(x){
+  return(x/0.39370)
+}
+cm2inch <- function(x){
+  return(0.39370*x)
+}
+
+p2cm <- function(x){
+  return(as.integer(0.008466666666666667 * x))
+}
+
+cm2p <- function(x){
+  return(as.integer(118.11023622047244 *x))
+}
+
+sv2ggkm <- function(svfit){
+  p <- ggsurvplot(fit = svfit, data = df,
+                risk.table.title = "risk.table.title", risk.table.y.text.col = TRUE,
+           risk.table.y.text = FALSE, fontsize = 5,
+           risk.table = TRUE, tables.theme = theme_pubr(), ggtheme = theme_pubr())
+  p_km <- p$plot
+  p_tb <- p$table
+  p2 <- cowplot::plot_grid(p_km, p_tb, ncol = 1,align = "v", rel_heights = c(3,1))
+  grid::grid.draw(p2)
+  return(p2)
+}
+
+f2metajson <- function(f){
+  l <- file.info(f) %>% as.list()
+  l2 <- list()
+  
+  l2 <- list()
+  l_names <- names(l)
+  
+  for (i in 1:length(l)){
+    if(l_names[i] %in% c("uid", "gid", "mode", "uname", "grname")){
+      # print(l_names[i])
+    }else{
+      if("POSIXct" %in% class(l[[i]])){
+        l2[[l_names[i]]] <- l[[i]] %>% 
+          lubridate::ymd_hms() %>% 
+          as.character()
+      }else{
+        l2[[l_names[i]]] <- as.character(l[[i]])
+      }
+    }
+  }
+  
+  l2$f <- f
+  l2$md5 <- f %>% 
+    file(.,open = "rb") %>% 
+    openssl::md5() %>% 
+    as.character() %>% 
+    as.character()
+  l2$sha256 <- f %>% 
+    file(.,open = "rb") %>% 
+    openssl::sha256() %>% 
+    as.character() %>% 
+    as.character()
+  print(l2)
+  f_json <- paste(f, ".json", sep="", collapse = "")
+  jsonlite::write_json(x = l2, path = f_json, pretty=T, auto_unbox=T)
+  # return(l2)
+  # # jsonlite::write_json(x = l2, path = f_json)
+}
+
+
+get_ts <- function(){
+  ts <- Sys.time() %>% 
+    as.character() %>% 
+    str_replace_all(" ", "_") %>% 
+    str_replace_all("\\-|:", "")
+  return(ts)
+}
+```
+
+```{r}
+ts <- get_ts()
+ts
+```
+
+
+```{r}
+# f_rds <- "./covid_adm_si_res_20230310_171038.rds"
+# f_rds <- "./covid_adm_si_res_20230605_202758.rds"
+f_rds <- "./covid_adm_si_res_20230626_222507.rds"
+df <- readRDS(f_rds) %>% 
+  bind_rows()
+# %>%
+
+df %>% colnames() %>% 
+  str_c(collapse = ",")
+df <- df %>% 
+  tidyr::complete(age_grade,
+                  had_covid_whole,
+                  had_adm_gen_whole,had_adm_men_whole,had_adm_unit_ad_whole,had_adm_unit_man_whole,had_adm_unit_whole,
+                  had_o2_whole,had_int_whole,had_ecmo_whole,
+                  yms, 
+                  fill = list(n_id1n = 0))
+
+```
+
+# Adm status
+```{r}
+# df_preadm <- df %>% filter(had_covid_whole == 1)
+# df_adm_gen <- df_preadm %>% 
+#   group_by(age_grade,had_adm_gen_whole, yms) %>% 
+#   summarise(n=sum(n_id1n)) %>% 
+#   mutate(categ_val = had_adm_gen_whole) %>% 
+#   mutate(categ = "general_hosp")
+# df_adm_men <- df_preadm %>% 
+#   group_by(age_grade,had_adm_men_whole, yms) %>% 
+#   summarise(n=sum(n_id1n))%>% 
+#   mutate(categ_val = had_adm_men_whole) %>% 
+#   mutate(categ = "mental_hosp")
+# df_adm_unit <- df_preadm %>% 
+#   group_by(age_grade,had_adm_unit_whole, yms) %>% 
+#   summarise(n=sum(n_id1n)) %>% 
+#   mutate(categ_val = had_adm_unit_whole) %>% 
+#   mutate(categ = "care_unit")
+# 
+# df_adm <- bind_rows(df_adm_gen, df_adm_men, df_adm_unit) %>% 
+#   mutate(mid_ym = str_c(yms, "15", sep="") %>% 
+#            lubridate::ymd()) %>% 
+#   filter(categ_val==1) %>% 
+#   mutate(n= as.numeric(n)) %>% 
+#   mutate(categ_bind = str_c(categ, age_grade, sep="_"))
+```
+
+
+
+```{r}
+df_preadm <- df
+# df_preadm$had_adm_gen_whole %>% sum()
+l_df3 <- list()
+df_preadm %>% colnames()
+
+l_categ <- c("had_adm_gen_whole","had_adm_unit_man_whole","had_adm_men_whole")
+# l_categ <- c("had_adm_gen_whole","had_adm_unit_whole","had_adm_men_whole")
+res_l <- list()
+for(ctg in l_categ){
+  print(ctg)
+  dfx <- df_preadm %>% 
+    dplyr::filter(.[[ctg]] == 1) %>% 
+    group_by_("age_grade","had_covid_whole", "yms") %>% 
+    summarise(n=sum(n_id1n) %>% 
+                as.numeric()) %>% 
+    mutate(mid_ym = str_c(yms, "15", sep="") %>% 
+             lubridate::ymd()) %>% 
+    mutate(categ_inf = ifelse(had_covid_whole ==1, 
+                          "rece_id_with_covid_diagnosis",
+                          "rece_id_without_covid")) %>% 
+    mutate(categ_l = ctg)
+  
+  minx <- min(dfx$mid_ym)
+  maxx <- max(dfx$mid_ym)
+  l_df3[[ctg]] <- dfx
+  px <- ggplot()+
+    theme_pubr(legend = "right")+
+      geom_line(data = dfx,
+            aes(x = mid_ym, y = n, color=age_grade))+
+      # geom_rect(data = dfx,
+      #           aes(
+      #   xmin=minx, xmax=maxx, ymin=0.5, ymax=9.5
+      # ),fill="gray90", color="gray90")+
+    facet_wrap(~ categ_inf, ncol = 1)+
+    ylab("")+xlab("")
+  # grid::grid.draw(px)
+  res_l[[ctg]] <- px
+}
+
+
+df_tbl <- bind_rows(l_df3)
+# px
+```
+
+
+```{r}
+require(cowplot)
+l_categ2 <- c("",l_categ[[1]], "", l_categ[[2]], "", l_categ[[3]])
+p3_adm <- cowplot::plot_grid(NULL,
+                            res_l$had_adm_gen_whole,
+                            NULL,
+                         res_l$had_adm_unit_man_whole,
+                                                  # res_l$had_adm_unit_whole,
+                         NULL,
+                         res_l$had_adm_men_whole, ncol = 1,align = "v",
+                         labels = l_categ2, label_fontfamily = "serif", 
+                         label_x = 0,hjust = 0,
+                         vjust = 0.2,
+                         rel_heights = c(0.1,1,0.1,1,0.1,1)
+                         )
+# p3_adm
+
+ggsave2_tri(plot = p3_adm, wid = 18, hei = 27)
+
+w1 <- 18
+h1 <- 12
+
+p1_gen <- res_l$had_adm_gen_whole +
+  xlab("time")+ylab("person_months")
+ggsave2_tri(plot = p1_gen, wid = w1, hei = h1)
+
+p1_unit <- res_l$had_adm_unit_man_whole+
+  xlab("time")+ylab("person_months")
+ggsave2_tri(plot = p1_unit, wid = w1, hei = h1)
+
+p1_men <- res_l$had_adm_men_whole+
+  xlab("time")+ylab("person_months")
+ggsave2_tri(plot = p1_men, wid = w1, hei = h1)
+
+
+```
+
+
+```{r}
+df_tbl4out <- df_tbl %>% 
+  mutate(n = if_else(0 < n & n < 10, "1~9", as.character(n)))
+
+# df_tbl4out
+f_adm_smr <- c("./adm_status_smr_", ts, ".csv") %>% 
+  str_c(collapse = "")
+f_adm_smr
+# write.csv(x = df_adm_tbl, file = f_adm_smr, )
+write.csv(x = df_tbl4out , f_adm_smr, quote = T, row.names = T)
+
+# df_test <- data.table::fread(f_adm_smr)
+```
+
+
+```{r}
+# f_rds <- "../Ps003_covid_pts_dist/covid_pts_res_20230313_211737.rds"
+f_rds <- "../Ps003_covid_pts_dist/covid_pts_res_20230602_203424.rds"
+df_pts <- readRDS(f_rds) %>% 
+  bind_rows() %>% 
+  tidyr::complete(had_covid_bool, age_grade, yms,file,  fill = list(unique_id1n_count = 0)) %>% 
+  group_by(had_covid_bool, yms,file) %>% 
+  summarise(unique_id1n_count = sum(unique_id1n_count)) %>% 
+  mutate(mid_ym = str_c(yms, "15", sep="") %>% 
+           lubridate::ymd()) %>% 
+  mutate(n_pts= unique_id1n_count,
+         categ = ifelse(had_covid_bool ==1, 
+                        "rece_id_with_covid_diagnosis",
+                        "rece_id_without")) %>% 
+  select(mid_ym, n_pts, categ) %>% 
+  filter(categ == "rece_id_with_covid_diagnosis") %>% 
+  mutate(n_pts = as.numeric(n_pts))
+```
+
+
+# o2 status  
+had_o2_whole,had_int_whole,had_ecmo_whole,
+```{r}
+df_preresp <- df 
+# # %>% filter(had_covid_whole == 1)
+# df_o2 <- df_preresp %>% 
+#   group_by(age_grade,had_o2_whole,had_covid_whole, yms) %>% 
+#   summarise(n=sum(n_id1n)) %>% 
+#   mutate(categ_val = had_o2_whole) %>% 
+#   mutate(categ = "o2") %>% 
+#   mutate(mid_ym = str_c(yms, "15", sep="") %>% 
+#            lubridate::ymd()) %>% 
+#   mutate(categ_inf = ifelse(had_covid_bool ==1, 
+#                         "rece_id_with_covid_diagnosis",
+#                         "rece_id_without")) 
+# 
+# df_int <- df_preresp %>% 
+#   group_by(age_grade,had_int_whole,had_covid_whole, yms) %>% 
+#   summarise(n=sum(n_id1n))%>% 
+#   mutate(categ_val = had_int_whole) %>% 
+#   mutate(categ = "int") %>% 
+#   mutate(mid_ym = str_c(yms, "15", sep="") %>% 
+#            lubridate::ymd()) %>% 
+#   mutate(categ_inf = ifelse(had_covid_bool ==1, 
+#                         "rece_id_with_covid_diagnosis",
+#                         "rece_id_without")) 
+# 
+# df_ecmo <- df_preresp %>% 
+#   group_by(age_grade,had_ecmo_whole,had_covid_whole, yms) %>% 
+#   summarise(n=sum(n_id1n)) %>% 
+#   mutate(categ_val = had_ecmo_whole) %>% 
+#   mutate(categ = "ecmo") %>% 
+#   mutate(mid_ym = str_c(yms, "15", sep="") %>% 
+#            lubridate::ymd()) %>% 
+#   mutate(categ_inf = ifelse(had_covid_bool ==1, 
+#                         "rece_id_with_covid_diagnosis",
+#                         "rece_id_without")) 
+
+
+# df_resp <- bind_rows(df_o2, df_int, df_ecmo) %>%
+#   filter(categ_val==1) %>% 
+#   mutate(n= as.numeric(n)) %>% 
+#   mutate(categ_bind = str_c(categ, age_grade, sep="_"))
+```
+
+
+```{r}
+
+l_categ <- c("had_o2_whole","had_int_whole", "had_ecmo_whole")
+l_df3 <- list()
+res_l <- list()
+for(ctg in l_categ){
+  print(ctg)
+  dfx <- df_preresp %>% 
+  dplyr::filter(.[[ctg]] == 1) %>% 
+  group_by_("age_grade","had_covid_whole", "yms") %>% 
+  summarise(n=sum(n_id1n) %>% 
+              as.numeric()) %>% 
+  mutate(mid_ym = str_c(yms, "15", sep="") %>% 
+           lubridate::ymd()) %>% 
+  mutate(categ_inf = ifelse(had_covid_whole ==1, 
+                        "rece_id_with_covid_diagnosis",
+                        "rece_id_without_covid")) %>% 
+    mutate(categ_l = ctg)
+  l_df3[[ctg]] <- dfx
+  
+  px <- ggplot()+
+    theme_pubr(legend = "right")+
+      geom_line(data = dfx,
+            aes(x = mid_ym, y = n, color=age_grade))+
+      # geom_rect(data = dfx,
+      #           aes(
+      #   xmin=minx, xmax=maxx, ymin=0.5, ymax=9.5
+      # ),fill="gray90", color="gray90")+
+    facet_wrap(~ categ_inf, ncol = 1)+
+    ylab("")+xlab("")
+  # grid::grid.draw(px)
+  res_l[[ctg]] <- px
+}
+
+df_tbl <- bind_rows(l_df3)
+df_tbl4out <- df_tbl %>% 
+  mutate(n = if_else(0 < n & n < 10, "1~9", as.character(n)))
+
+f_o2_smr <- c("./o2_status_smr_", ts, ".csv") %>% 
+  str_c(collapse = "")
+f_o2_smr
+# write.csv(x = df_adm_tbl, file = f_adm_smr, )
+write.csv(x = df_tbl4out, f_o2_smr, quote = T, row.names = T)
+
+df_test2 <- data.table::fread(f_o2_smr)
+```
+
+```{r}
+require(cowplot)
+l_categ2 <- c("",l_categ[[1]], "", l_categ[[2]], "", l_categ[[3]])
+p3_o2 <- cowplot::plot_grid(NULL,
+                            res_l$had_o2_whole,
+                            NULL,
+                         res_l$had_int_whole,
+                         NULL,
+                         res_l$had_ecmo_whole, ncol = 1,align = "v",
+                         labels = l_categ2, label_fontfamily = "serif", 
+                         label_x = 0,hjust = 0,
+                         vjust = 0.2,
+                         rel_heights = c(0.1,1,0.1,1,0.1,1)
+                         )
+# p3_o2
+
+ggsave2_tri(plot = p3_o2, wid = 18, hei = 26)
+
+
+p1_o2 <- res_l$had_o2_whole +
+  xlab("time")+ylab("person_months")
+ggsave2_tri(plot = p1_o2, wid = w1, hei = h1)
+
+p1_int <- res_l$had_int_whole+
+  xlab("time")+ylab("person_months")
+ggsave2_tri(plot = p1_int, wid = w1, hei = h1)
+
+p1_ecmo <- res_l$had_ecmo_whole+
+  xlab("time")+ylab("person_months")
+ggsave2_tri(plot = p1_ecmo, wid = w1, hei = h1)
+
+```
+
+
+```{r}
+sessionInfo()
+```
+

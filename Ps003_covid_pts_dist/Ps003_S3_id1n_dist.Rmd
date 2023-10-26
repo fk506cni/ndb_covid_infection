@@ -1,0 +1,379 @@
+---
+title: "Ps003_S3_id1n_dist"
+author: "fk506cni"
+date: "2023/5/11"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+require(DBI)
+require(dbplyr)
+require(RPostgreSQL)
+require(tidyverse)
+require(openxlsx)
+require(DT)
+require(tictoc)
+require(jsonlite)
+require(glue)
+require(parallel)
+```
+
+```{r}
+f_l <- "../dat4all/authdat/sec_l.json"
+# f_r <- "../dat4all/authdat/sec.json"
+```
+
+```{r}
+f2con <- function(f_json){
+  dic <- jsonlite::read_json(f_json)
+  host <- dic$host
+  port <- dic$port
+  user <- dic$user
+  password <- dic$password
+  dbname <- dic$dbname
+  
+  # dic
+  con <- DBI::dbConnect(RPostgres::Postgres(),
+                        host=host,
+                        port=port,
+                        user=user,
+                        password = password,
+                        dbname=dbname)
+  
+  return(con)
+}
+
+con <- f2con(f_l)
+```
+
+
+
+
+```{r}
+f_iy <- "~/dat/tools/20230201/df_sy_master_share_20220922.xlsx"
+f_iyb <- "~/dat/tools/20230201/df_sy_aborted_master_share_20220922.xlsx"
+dfi <- read.xlsx(f_iy) %>% 
+  dplyr::filter(pick_check != 0)
+dfia <- read.xlsx(f_iyb) %>% 
+  dplyr::filter(pick_check != 0)
+
+dfia %>% dim()
+
+dfi %>% colnames()
+df_y <- dfi %>% 
+  dplyr::select(one_of(c("Col4Cat",
+                         "pick_check",
+                         "ICD10",
+                         "sy_base",
+                         "sy_code",
+                         "sy_trans_code"))) %>% 
+  dplyr::distinct() %>% 
+  filter(str_detect(Col4Cat,"コロナウイルス")) %>% 
+  filter(ICD10 =="U071")
+
+discode  <- c(df_y$sy_code, df_y$sy_trans_code) %>% 
+  unique()
+
+discode
+```
+
+
+
+```{r}
+# f_q <- "./re_sy_02.sql"
+
+qq <- function(qfile, params = NULL, con = NULL){
+  q_read <- qfile %>% 
+    read_file() %>% 
+    str_remove(., "^-- !preview conn=con\n") 
+  if(is.null(params)){
+    return(q_read)
+  }else{
+    params0 <- list(q_read)
+    params_bind <- append(params0, params)
+    params_bind$.con = con
+    print(params_bind)
+    do.call(glue_sql, params_bind) %>% 
+    # glue_sql(q_read, .x= params,.con= con) %>% 
+      return()
+  }
+}
+# # read_file(f_q) %>% 
+# #   str_remove(., "^-- !preview conn=con\n")
+# 
+# # qq(f_q)
+# q_fix <- qq(qfile = f_q, params = arglist, con = con)
+```
+
+```{r}
+qfa2df <- function(q_f, arglist, con){
+  tic()
+  q_fix <- qq(qfile = q_f, params = arglist, con = con)
+  print(q_fix)
+  res <- dbSendQuery(con, q_fix)
+  
+  df_0 <- data.frame()
+  l_df <- list()
+  chunksize <- 1e+4
+  iternum <- 1
+  while(!dbHasCompleted(res)){
+    if(iternum %% 50 == 0){
+      print(iternum)
+    }
+    df_i <- dbFetch(res, n = chunksize)
+    # df_0 <- bind_rows(df_0, df_i)
+    l_df[[iternum]] <- df_i
+    # # l_df <- append(l_df, df_i)
+    iternum <- iternum +1
+  }
+  dbClearResult(res)
+  toc()
+  
+  # l_df <- bind_rows(l_df)
+  l_df_ <- data.table::rbindlist(l_df)
+  
+  l_df_ %>% 
+    dim() %>% 
+    print()
+  return(l_df_)
+}
+```
+
+
+
+```{r}
+qfa2Ex <- function(f, con, arglist){
+  tic()
+  tb <- arglist$tbl
+  q_fix <- qq(qfile = f, params = arglist, con = con)
+  print(q_fix)
+  
+  dbExecute(conn = con, statement = q_fix)
+  
+  toc()
+}
+
+get_ts <- function(){
+  ts <- Sys.time() %>% 
+    as.character() %>% 
+    str_replace_all(" ", "_") %>% 
+    str_replace_all("\\-|:", "")
+  return(ts)
+}
+
+```
+
+
+```{r}
+arglist <- list()
+
+# arglist$ym <- 202003
+arglist$discode <- discode %>% 
+  str_c(collapse =  "','")
+# arglist$limits <- NULL
+arglist
+```
+
+```{r}
+f_pick_dis <- "./queries/pick_dis_func.sql"
+qfa2Ex(f = f_pick_dis, con = con, arglist = arglist)
+f_pick_si <- "./queries/pick_si_func.sql"
+qfa2Ex(f = f_pick_si, con = con, arglist = arglist)
+
+```
+
+
+```{r}
+df_grid <- readRDS("../dat4all/masters/ym_grid.rds") %>% 
+  mutate(ym = as.character(ym))
+df_grid %>% 
+  DT::datatable()
+```
+
+
+
+```{r}
+tic()
+toc()
+```
+
+
+```{r}
+# f_ <- "./queries/covid_id_smr_any_wfunc.sql"
+f_ <- "./queries/covid_id_dist_any_wfunc.sql"
+# f_iy_m <- "./queries/covid_id_smr_main.sql"
+# df_ym_i <-  qfa2df(q_f = f_iy, arglist = arglist)
+# df_ym
+
+yms <- df_grid$ym
+# [11:11]
+# fs <- c(f_iy_a)
+# fs <- c(f_iy_a, f_iy_m)
+
+# 
+# tic()
+# df_whole <- data.frame()
+# for (ym_i in yms){
+#   for(f in fs){
+# 
+#     print(f)
+#     print(ym_i)
+# 
+#     arglist$ym <- ym_i
+#     df_ym_i <-  qfa2df(q_f = f, arglist = arglist, con = con)
+#     df_ym_i <- df_ym_i %>%
+#       mutate(yms = ym_i,
+#              file = f)
+#     df_whole <- bind_rows(df_whole,
+#                           df_ym_i)
+# 
+#   }
+#   # break()
+# }
+# toc()
+
+# qfa2df(q_f = f, arglist = arglist, con = con)
+# f
+# con
+# arglist
+
+arglist
+# df_dpc_iy <- qfa2df(q_f = f_iy, arglist = arglist) %>%
+#   left_join(df_y, by="medicine_cd")%>%
+#   dplyr::select(digit4, digit7, drug_name_kana, everything()) %>%
+#   arrange(seq2_no)
+
+```
+
+
+
+```{r}
+
+log_out <- function(i,l, tag, timing = NULL){
+  if(is.null(l[["ym"]])){
+    ym <- "9999"
+  }else{
+    ym <- l[["ym"]] %>% 
+      as.character()
+  }
+  if(is.null(timing)){
+    timing <- "start"
+  }
+  
+  path_i <- paste("./logdir/","log_",
+                  as.character(i),"_",
+                  timing, "_",
+                  ym, "_" ,
+                  tag,"_",
+                  get_ts(), ".json", collapse = "")
+  jsonlite::write_json(x = l, path = path_i)
+  
+}
+
+
+get_tabl <- function(i){
+  gc(reset = T)
+  gc(reset = T)
+
+  f_l <- "../dat4all/authdat/sec_l.json"
+  con <- f2con(f_json = f_l)
+  
+  ym <- yms[[i]]
+  print(ym)
+  arglist$ym <- ym
+  
+  f_out <- c("~/temp/covid_pts_dist_", ym,"_" ,get_ts(), ".rds") %>% 
+  str_c(., collapse = "")
+  print(f_out)
+  
+  log_out(i = i, l = arglist, tag = "covid_pts_dist_")
+  df_ym_i <-  qfa2df(q_f = f_, arglist = arglist, con = con)
+  
+  # ymはファイル名から取る。
+  # df_ym_i <- df_ym_i %>%
+  #     mutate(yms = ym)
+
+  log_out(i = i, l = arglist, tag = "covid_pts_dist_", timing = "end")
+  df_ym_i %>%
+    saveRDS(object = ., file = f_out)
+  
+  dbDisconnect(conn = con)
+  rm(df_ym_i)
+  gc(reset = T)
+  gc(reset = T)
+  # return(df_ym_i)
+  return(arglist)
+}
+
+# 
+# f_out <- c("./covid_pts_dist_", ym,"_" ,get_ts(), ".rds") %>% 
+#   str_c(., collapse = "")
+# f_out
+# res %>% 
+#   saveRDS(object = ., file = f_out)
+
+```
+
+
+```{r}
+# tic()
+# dfx_i <- get_tabl(2)
+# toc()
+# 
+# dfx_i
+```
+
+```{r}
+# df_whole <- data.frame()
+# d_out <- "/m"
+for(i in 1:length(yms)){
+# # for(i in 1:2){
+#   log_out(i = i, l = list(), tag = "accum_pts", timing = "_i_start")
+#   ym_i <- yms[[i]]
+#   f_out <- c("./covid_pts_dist_whole_",get_ts(), ".rds") %>%
+#     str_c(., collapse = "")
+#   f_out %>% 
+#     print()
+  get_tabl(i)
+#   get_tabl(i) %>% 
+#     saveRDS(object = ., file = f_out)
+#   # dfx_i <- get_tabl(1) %>% 
+#   #   mutate(n_presnt = 1)
+#   # df_whole <- bind_rows(df_whole, dfx_i) %>% 
+#   #   group_by(id1n) %>% 
+#   #   summarize(sex_mean = mean(sex_mean),
+#   #             age_hier_cd1_int_min = min(age_hier_cd1_int_min),
+#   #             had_covid_bool = sum(had_covid_bool),
+#   #             n_presnt = sum(n_presnt))
+}
+# 
+# 
+# f_out <- c("./covid_pts_dist_whole_",get_ts(), ".rds") %>%
+#   str_c(., collapse = "")
+# f_out
+# df_whole %>%
+#   saveRDS(object = ., file = f_out)
+# 
+# 
+# # df_whole %>% filter(sex_mean != 1) %>% filter(sex_mean != 2)
+```
+
+
+```{r}
+# df_i_test <- readRDS("~/temp/covid_pts_dist_202001_20230511_171111.rds")
+# 
+# 
+# df_i_head <- df_i_test %>% head()
+# rm(df_i_test)
+# gc(reset = T)
+# gc(reset = T)
+```
+
+
+
+```{r}
+sessionInfo()
+```
+

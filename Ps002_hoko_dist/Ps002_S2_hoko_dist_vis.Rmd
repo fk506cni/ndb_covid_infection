@@ -1,0 +1,234 @@
+---
+title: "Ps002_S2_hoko_dist_vis"
+author: "fk506cni"
+date: "2023/6/8"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+
+```{r}
+require(tidyverse)
+require(openxlsx)
+require(DT)
+require(tictoc)
+require(data.table)
+require(officer)
+require(lubridate)
+```
+
+
+```{r}
+outputdir <- "./figs/"
+if(!dir.exists(outputdir)){
+  dir.create(outputdir)
+}
+
+ggsave2_tri <- function(plot, wid = 9, hei=9){
+  plot_name <- deparse(substitute(plot))
+  
+  #png
+  file_name <- paste(outputdir,plot_name, ".png", sep = "",collapse = "")
+  ggsave(filename = file_name,plot = plot,device = "png",width = wid, height = hei,dpi = 300,units = "cm")
+  f2metajson(file_name)
+  
+  # #pdf
+  # file_name <- paste(outputdir,plot_name, ".pdf", sep = "",collapse = "")
+  # ggsave(filename = file_name,plot = plot,device = "pdf",width = wid, height = hei,dpi = 300,units = "cm")
+  # f2metajson(file_name)
+  
+  #pptx
+  file_name <- paste(outputdir,plot_name, ".pptx", sep = "",collapse = "")
+  plot_ed <- rvg::dml(ggobj = plot,width = wid, height = hei)
+  
+  doc <- read_pptx() %>%
+    add_slide('Title and Content', 'Office Theme') %>%
+    ph_with(value = "", location = ph_location_type(type = "title")) %>%
+    ph_with(value = plot_ed, location = ph_location(type = "body",width = cm2inch(wid), height = cm2inch(hei),left = 2, top = 2))
+  doc %>%
+    print(target = file_name)
+  f2metajson(file_name)
+  
+}
+
+
+
+inch2cm <- function(x){
+  return(x/0.39370)
+}
+cm2inch <- function(x){
+  return(0.39370*x)
+}
+
+p2cm <- function(x){
+  return(as.integer(0.008466666666666667 * x))
+}
+
+cm2p <- function(x){
+  return(as.integer(118.11023622047244 *x))
+}
+
+sv2ggkm <- function(svfit){
+  p <- ggsurvplot(fit = svfit, data = df,
+                risk.table.title = "risk.table.title", risk.table.y.text.col = TRUE,
+           risk.table.y.text = FALSE, fontsize = 5,
+           risk.table = TRUE, tables.theme = theme_pubr(), ggtheme = theme_pubr())
+  p_km <- p$plot
+  p_tb <- p$table
+  p2 <- cowplot::plot_grid(p_km, p_tb, ncol = 1,align = "v", rel_heights = c(3,1))
+  grid::grid.draw(p2)
+  return(p2)
+}
+
+
+f2metajson <- function(f){
+  l <- file.info(f) %>% as.list()
+  l2 <- list()
+  
+  l2 <- list()
+  l_names <- names(l)
+  
+  for (i in 1:length(l)){
+    if(l_names[i] %in% c("uid", "gid", "mode", "uname", "grname")){
+      # print(l_names[i])
+    }else{
+      if("POSIXct" %in% class(l[[i]])){
+        l2[[l_names[i]]] <- l[[i]] %>% 
+          lubridate::ymd_hms() %>% 
+          as.character()
+      }else{
+        l2[[l_names[i]]] <- as.character(l[[i]])
+      }
+    }
+  }
+  
+  l2$f <- f
+  l2$md5 <- f %>% 
+    file(.,open = "rb") %>% 
+    openssl::md5() %>% 
+    as.character() %>% 
+    as.character()
+  l2$sha256 <- f %>% 
+    file(.,open = "rb") %>% 
+    openssl::sha256() %>% 
+    as.character() %>% 
+    as.character()
+  print(l2)
+  f_json <- paste(f, ".json", sep="", collapse = "")
+  jsonlite::write_json(x = l2, path = f_json, pretty=T, auto_unbox=T)
+  # return(l2)
+  # # jsonlite::write_json(x = l2, path = f_json)
+}
+
+
+get_ts <- function(){
+  ts <- Sys.time() %>% 
+    as.character() %>% 
+    str_replace_all(" ", "_") %>% 
+    str_replace_all("\\-|:", "")
+  return(ts)
+}
+
+
+```
+
+```{r}
+ts <- get_ts()
+ts
+```
+
+```{r}
+# f_hk_rds <- "./covid_hoko_res_20230607_015228.rds"
+# f_hk_rds <- "./covid_hoko_res_20230608_162549.rds"
+# f_hk_rds <- "./covid_hoko_res_20230616_151114.rds"
+# f_hk_rds <- "./covid_hoko_res_20230703_202226.rds"
+f_hk_rds <- "./covid_hoko_res_20230720_190606.rds"
+
+df_hk <- readRDS(f_hk_rds) %>% 
+  bind_rows() %>% 
+  mutate(unique_id1n_count = as.numeric(unique_id1n_count),
+         sum_of_sum_total_score = as.numeric(sum_of_sum_total_score)) %>% 
+  tidyr::complete(had_covid_bool, age_grade, yms, 
+                  fill = list(unique_id1n_count=0,
+                              sum_of_sum_total_score=0)) %>% 
+  mutate(yen = 10*sum_of_sum_total_score) %>% 
+  mutate(mid_ym = str_c(yms, "15", sep="") %>% 
+           lubridate::ymd(),
+         categ = ifelse(had_covid_bool ==1, 
+                        "rece_id_with_covid_diagnosis",
+                        "rece_id_without")
+         ) %>%
+  mutate(ym_num = as.numeric(yms))
+
+df_hk %>% colnames() 
+
+
+# df_hk$sum_of_sum_total_score %>% sum()/3
+```
+
+
+```{r}
+# df_hk %>%
+#   filter(202004 <= ym_num & ym_num <= 202103) %>%
+#   .[["sum_of_sum_total_score"]] %>% sum()
+# 
+# df_hk %>% mutate(y = str_sub(yms, 1,4)) %>%
+#   group_by(y) %>%
+#   summarise(yen =  10*sum(sum_of_sum_total_score))
+```
+
+```{r}
+require(ggpubr)
+
+p_cost_whole <- ggplot()+theme_pubr()+
+  geom_line(data = df_hk,
+            aes(x=mid_ym, y=yen, color=age_grade))+
+  facet_wrap(~ categ, ncol = 1)
+# p_cost_whole
+```
+
+```{r}
+w1 <- 18
+h1 <- 12
+
+ggsave2_tri(p_cost_whole, wid = w1, hei = h1)
+```
+
+
+```{r}
+df_hk_pos <- df_hk %>% 
+  filter(had_covid_bool == 1)
+
+p_cost_pos <- ggplot()+theme_pubr()+
+  geom_line(data = df_hk_pos,
+            aes(x=mid_ym, y=yen, color=age_grade))
+# p_cost_pos
+
+ggsave2_tri(p_cost_pos, wid = w1, hei = h1)
+
+```
+
+
+```{r}
+# df_hk %>%
+#   mutate(y = str_sub(yms, 1, 4)) %>%
+#   group_by(y) %>%
+#   summarise(sumpoint = sum(sum_of_sum_total_score))
+```
+
+
+```{r}
+f_hk_smr <- c("./figs/hoko_status_smr_", ts, ".csv") %>% 
+  str_c(collapse = "")
+
+f_hk_smr
+
+write.csv(x = df_hk, f_hk_smr, quote = T, row.names = T)
+```
+
+
+```{r}
+sessionInfo()
+```
+

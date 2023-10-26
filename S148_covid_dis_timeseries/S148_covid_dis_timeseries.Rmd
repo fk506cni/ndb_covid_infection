@@ -1,0 +1,167 @@
+---
+title: "S148_covid_dis_timeseries"
+author: "fk506.cni"
+date: "2023-02-15"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+
+From:  
+https://covid19.mhlw.go.jp/  
+https://www.mhlw.go.jp/stf/covid-19/open-data_english.html
+
+
+```{r}
+outputdir <- "./figs/"
+if(!dir.exists(outputdir)){
+  dir.create(outputdir)
+}
+
+ggsave2_tri <- function(plot, wid = 9, hei=9){
+  plot_name <- deparse(substitute(plot))
+  
+  #png
+  file_name <- paste(outputdir,plot_name, ".png", sep = "",collapse = "")
+  ggsave(filename = file_name,plot = plot,device = "png",width = wid, height = hei,dpi = 300,units = "cm")
+  
+  
+  #pdf
+  file_name <- paste(outputdir,plot_name, ".pdf", sep = "",collapse = "")
+  ggsave(filename = file_name,plot = plot,device = "pdf",width = wid, height = hei,dpi = 300,units = "cm")
+  
+  #pptx
+  file_name <- paste(outputdir,plot_name, ".pptx", sep = "",collapse = "")
+  plot_ed <- rvg::dml(ggobj = plot,width = wid, height = hei)
+  
+  doc <- read_pptx() %>%
+    add_slide('Title and Content', 'Office Theme') %>%
+    ph_with(value = "", location = ph_location_type(type = "title")) %>%
+    ph_with(value = plot_ed, location = ph_location(type = "body",width = cm2inch(wid), height = cm2inch(hei),left = 2, top = 2))
+  doc %>%
+    print(target = file_name)
+  
+}
+
+
+
+inch2cm <- function(x){
+  return(x/0.39370)
+}
+cm2inch <- function(x){
+  return(0.39370*x)
+}
+
+p2cm <- function(x){
+  return(as.integer(0.008466666666666667 * x))
+}
+
+cm2p <- function(x){
+  return(as.integer(118.11023622047244 *x))
+}
+
+sv2ggkm <- function(svfit){
+  p <- ggsurvplot(fit = svfit, data = df,
+                risk.table.title = "risk.table.title", risk.table.y.text.col = TRUE,
+           risk.table.y.text = FALSE, fontsize = 5,
+           risk.table = TRUE, tables.theme = theme_pubr(), ggtheme = theme_pubr())
+  p_km <- p$plot
+  p_tb <- p$table
+  p2 <- cowplot::plot_grid(p_km, p_tb, ncol = 1,align = "v", rel_heights = c(3,1))
+  grid::grid.draw(p2)
+  return(p2)
+}
+```
+
+
+
+```{r}
+require(tidyverse)
+require(data.table)
+require(lubridate)
+require(officer)
+
+```
+
+```{r}
+f <- "./dat/newly_confirmed_cases_daily.csv"
+df <- fread(f) %>% 
+  mutate(dt = lubridate::ymd(Date),
+         mt = lubridate::month(dt),
+         yr = lubridate::year(dt),
+         mid_ym = lubridate::make_date(yr, mt, "15")) %>% 
+  select(dt,mt,yr,mid_ym, everything())
+
+df %>% 
+  DT::datatable()
+```
+
+```{r}
+require(ggpubr)
+df_smr <- df %>% 
+  group_by(mid_ym) %>% 
+  summarise(n=sum(ALL))
+
+p <- ggplot()+theme_pubr()+
+  geom_line(data =df_smr,
+            aes(x=mid_ym, y=n))+
+  geom_point(data =df_smr,
+            aes(x=mid_ym, y=n),
+            color="red")+
+  coord_cartesian(ylim = c(0, 7e+06), expand = F)
+
+
+# p
+```
+
+```{r}
+ggsave2_tri(p, wid = 15)
+```
+
+```{r}
+# library(ggplot2)
+require(ggpubr)
+df <- data.frame(
+  x = 1:20,
+  y = c(2, 3, 2, 4, 1, 7, 5, 8, 9, 4, 2, 1, 3, 5, 12, 16, 11, 9, 14, 19)
+)
+
+df_tile <- data.frame(x=df$x, y=1)
+df_tile <- expand.grid(x=df$x, y=1:9)
+
+p_mask <- ggplot()+theme_pubr()+
+  geom_line(data=df,
+            aes(x=x, y=y))+
+  geom_rect(aes(xmin=min(df$x), xmax=max(df$x), ymin=0.5, ymax=9.5), fill="gray90", color="gray90")+
+  # geom_tile(data = df_tile,
+  #           aes(x=x, y = y),color="gray",fill="gray",alpha=0.5)+
+  coord_cartesian(expand = T)
+p_mask
+
+ggsave2_tri(p_mask)
+# ggplot(df, aes(x, y)) +
+#   geom_line() +
+#   ylim(0, 20)
+
+
+p_mask2 <- ggplot()+theme_pubr()+
+  geom_line(data=df,
+            aes(x=x, y=y))+
+  geom_tile(data = df_tile,
+            aes(x=x, y = y),color="gray",fill="gray",alpha=1)+
+  coord_cartesian(expand = T)
+p_mask2
+
+ggsave2_tri(p_mask2)
+```
+
+
+```{r}
+ggplot(df, aes(x, y)) +
+  geom_line() +
+  stat_smooth(method = "loess", se = T) +
+  ylim(0, 10)
+
+```
+

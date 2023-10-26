@@ -1,0 +1,400 @@
+---
+title: "Ps06_assay_dist_vis"
+author: "fk506cni"
+date: "2023/3/9"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+
+```{r}
+require(tidyverse)
+require(openxlsx)
+require(DT)
+require(tictoc)
+require(data.table)
+require(officer)
+require(lubridate)
+```
+
+
+```{r}
+outputdir <- "./figs/"
+if(!dir.exists(outputdir)){
+  dir.create(outputdir)
+}
+
+ggsave2_tri <- function(plot, wid = 9, hei=9){
+  plot_name <- deparse(substitute(plot))
+  
+  #png
+  file_name <- paste(outputdir,plot_name, ".png", sep = "",collapse = "")
+  ggsave(filename = file_name,plot = plot,device = "png",width = wid, height = hei,dpi = 300,units = "cm")
+  f2metajson(file_name)
+  
+  # #pdf
+  # file_name <- paste(outputdir,plot_name, ".pdf", sep = "",collapse = "")
+  # ggsave(filename = file_name,plot = plot,device = "pdf",width = wid, height = hei,dpi = 300,units = "cm")
+  # f2metajson(file_name)
+  
+  #pptx
+  file_name <- paste(outputdir,plot_name, ".pptx", sep = "",collapse = "")
+  plot_ed <- rvg::dml(ggobj = plot,width = wid, height = hei)
+  
+  doc <- read_pptx() %>%
+    add_slide('Title and Content', 'Office Theme') %>%
+    ph_with(value = "", location = ph_location_type(type = "title")) %>%
+    ph_with(value = plot_ed, location = ph_location(type = "body",width = cm2inch(wid), height = cm2inch(hei),left = 2, top = 2))
+  doc %>%
+    print(target = file_name)
+  f2metajson(file_name)
+  
+}
+
+
+
+inch2cm <- function(x){
+  return(x/0.39370)
+}
+cm2inch <- function(x){
+  return(0.39370*x)
+}
+
+p2cm <- function(x){
+  return(as.integer(0.008466666666666667 * x))
+}
+
+cm2p <- function(x){
+  return(as.integer(118.11023622047244 *x))
+}
+
+sv2ggkm <- function(svfit){
+  p <- ggsurvplot(fit = svfit, data = df,
+                risk.table.title = "risk.table.title", risk.table.y.text.col = TRUE,
+           risk.table.y.text = FALSE, fontsize = 5,
+           risk.table = TRUE, tables.theme = theme_pubr(), ggtheme = theme_pubr())
+  p_km <- p$plot
+  p_tb <- p$table
+  p2 <- cowplot::plot_grid(p_km, p_tb, ncol = 1,align = "v", rel_heights = c(3,1))
+  grid::grid.draw(p2)
+  return(p2)
+}
+
+
+f2metajson <- function(f){
+  l <- file.info(f) %>% as.list()
+  l2 <- list()
+  
+  l2 <- list()
+  l_names <- names(l)
+  
+  for (i in 1:length(l)){
+    if(l_names[i] %in% c("uid", "gid", "mode", "uname", "grname")){
+      # print(l_names[i])
+    }else{
+      if("POSIXct" %in% class(l[[i]])){
+        l2[[l_names[i]]] <- l[[i]] %>% 
+          lubridate::ymd_hms() %>% 
+          as.character()
+      }else{
+        l2[[l_names[i]]] <- as.character(l[[i]])
+      }
+    }
+  }
+  
+  l2$f <- f
+  l2$md5 <- f %>% 
+    file(.,open = "rb") %>% 
+    openssl::md5() %>% 
+    as.character() %>% 
+    as.character()
+  l2$sha256 <- f %>% 
+    file(.,open = "rb") %>% 
+    openssl::sha256() %>% 
+    as.character() %>% 
+    as.character()
+  print(l2)
+  f_json <- paste(f, ".json", sep="", collapse = "")
+  jsonlite::write_json(x = l2, path = f_json, pretty=T, auto_unbox=T)
+  # return(l2)
+  # # jsonlite::write_json(x = l2, path = f_json)
+}
+
+
+get_ts <- function(){
+  ts <- Sys.time() %>% 
+    as.character() %>% 
+    str_replace_all(" ", "_") %>% 
+    str_replace_all("\\-|:", "")
+  return(ts)
+}
+
+
+```
+
+```{r}
+ts <- get_ts()
+ts
+```
+
+
+
+```{r}
+# f_rds <- "../Ps003_covid_pts_dist/covid_pts_res_20230602_203424.rds"
+# f_rds <- "../Ps003_covid_pts_dist//covid_pts_res_20230306_131443.rds"
+# 
+f_rds <- "../Ps003_covid_pts_dist/covid_pts_res_20230602_203424.rds"
+
+df_pts <- readRDS(f_rds) %>% 
+  bind_rows() %>% 
+  tidyr::complete(had_covid_bool, yms, fill = list(unique_id1n_count = 0)) %>% 
+     filter(had_covid_bool == 1) %>% 
+  mutate(mid_ym = str_c(yms, "15", sep="") %>% 
+           lubridate::ymd(),
+         n_pts= unique_id1n_count %>% 
+           as.numeric())  %>% 
+  group_by(mid_ym) %>% 
+  summarise(n_pts = sum(n_pts))
+
+
+
+```
+
+
+```{r}
+f_si <- "../dat4all/masters/kikin_si_master_whole_20230223.xlsx"
+df_si <- read.xlsx(f_si) %>% 
+  dplyr::select(V91, V92, V93, V5, everything()) %>% 
+  dplyr::rename(prac_act_cd = V3)
+# %>% 
+#   filter(V91 %in% c("02"))
+# df_adm %>%
+#   DT::datatable()
+
+df_sars <- df_si %>%
+  filter(str_detect(V5, "ＳＡＲＳ")) %>% 
+  mutate(V5 = as.character(V5))
+# %>% 
+#   mutate(V5cat = str_)
+
+df_sars %>% DT::datatable()
+
+# testcodes <- df_sars %>% 
+#   .[["V3"]] %>%
+#   unique()
+```
+
+
+```{r}
+# f_t_rds <- "./covid_exam_res_20230309_114205.rds"
+# f_t_rds <- "./covid_exam_res_20230606_151312.rds"
+f_t_rds <- "./covid_exam_res_20230627_100745.rds"
+df_test <- readRDS(f_t_rds) %>% 
+  bind_rows() %>% 
+  tidyr::complete(yms,prac_act_cd, fill = list(seq2no_count=0,total_assay_times = 0)) %>% 
+  left_join(df_sars, by="prac_act_cd") %>% 
+  mutate(mid_ym = str_c(yms, "15", sep="") %>% 
+           lubridate::ymd()
+         , V5 = V5 
+         ) %>% 
+  group_by(mid_ym, V5) %>% 
+  summarise(n_assay = sum(total_assay_times)) %>% 
+  mutate(is_itaku = str_detect(V5,"委託") & !str_detect(V5, "委託以外|委託外"),
+         is_nucle = str_detect(V5,"核酸"),
+         is_anti = str_detect(V5,"抗原")) %>% 
+  mutate(cat_inout = if_else(is_itaku, "consign", "not"),
+         cat_detect = case_when(
+           is_nucle ~ "nucleotide",
+           is_anti ~ "antigen",
+           T ~ "other"
+         )) %>% 
+  mutate(cat2 = case_when(
+    is_itaku & is_nucle ~ "consign:nucle",
+    !is_itaku & is_nucle ~ "not_cons:nucle",
+    is_itaku & !is_nucle ~ "consign:antigen",
+    !is_itaku & !is_nucle ~ "not_cons:antigen",
+    T~ "other"
+  )) %>% 
+  mutate(v5lab = V5 %>% 
+           str_replace("ＳＡＲＳ－ＣｏＶ－２" , "covid-19") %>%
+           str_replace_all("ＳＡＲＳコロナウイルス" , "covid-19") %>% 
+           str_replace("ＲＳウイルス" , "RSV") %>% 
+           str_replace("ＲＳ" , "RSV") %>% 
+           str_replace("インフルエンザウイルス" , "IFLV") %>% 
+           str_replace("インフルエンザ" , "IFLV") %>% 
+           str_replace("核酸同時検出" , ":NucMulti") %>% 
+           str_replace_all("・" , "/") %>% 
+           str_replace_all("抗原同時検出" , ":AngMulti") %>% 
+           str_replace_all("（検査委託）" , ":consign") %>% 
+           str_replace("（委託）", ":consign") %>% 
+           str_replace("核酸検出","Nuc") %>% 
+           str_replace("抗原検出","Ang") %>% 
+           str_replace("（定性）", ":Qualit") %>% 
+           str_replace("（定量）", ":Quant") %>% 
+           str_replace("（検査委託以外）", ":notcons") %>% 
+           str_replace("（委託外）", ":notcons")
+           )
+
+df_test %>% 
+  filter(is_itaku) %>% 
+  .[["V5"]] %>% 
+  unique()
+  # .[str_detect(.,"委託")] %>% 
+  # unique()
+
+df_test$V5 %>% 
+  unique() %>% length()
+df_test$v5lab %>% 
+  unique() %>% length()
+
+# df_test$V5 %>% stringi::stri_na2empty()
+# df_test$V5
+# df_test %>% colnames() %>% 
+#   str_c(collapse = ",")
+
+# s <- "ＳＡＲＳ－ＣｏＶ－２・ＲＳウイルス核酸同時検出（検査委託）"
+# stringi::stri_enc_toutf8(s)
+
+# gc(reset = T)
+```
+
+
+```{r}
+require(ggpubr)
+w1 <- 18
+h1 <- 12
+
+df_whole <- bind_rows(
+  df_pts %>% rename(n=n_pts) %>% mutate(cat="patients"),
+  df_test %>% 
+    group_by(mid_ym) %>% 
+    summarise(n = sum(as.numeric(n_assay))) %>% 
+    mutate(cat="whole assay")
+)
+
+p_whole_tes <- ggplot()+theme_pubr(legend = "right")+
+    geom_line(data = df_whole,
+            aes(x = mid_ym, y = n, color=cat))
+# p_whole_tes
+
+ggsave2_tri(plot = p_whole_tes, wid = w1, hei = h1)
+
+f_whole <- c("./test_whole_", ts, ".csv") %>% 
+  str_c(. ,sep = "", collapse = "")
+f_whole
+
+write.csv(df_whole, f_whole, row.names = T, quote = T)
+```
+
+
+```{r}
+df_whole_inout <- bind_rows(
+  df_pts %>% rename(n=n_pts) %>% mutate(cat="patients"),
+  df_test %>% 
+    group_by(mid_ym, cat_inout) %>% 
+    summarise(n = sum(as.numeric(n_assay))) %>% 
+    rename(cat=cat_inout)
+)
+
+p_whole_inout <- ggplot()+theme_pubr(legend = "right")+
+    geom_line(data = df_whole_inout,
+            aes(x = mid_ym, y = n, color=cat))
+# p_whole_inout
+ggsave2_tri(plot = p_whole_inout, wid = w1, hei = h1)
+
+
+f_inout <- c("./test_whole_inout_", ts, ".csv") %>% 
+  str_c(. ,sep = "", collapse = "")
+f_inout
+
+write.csv(df_whole_inout, f_inout, row.names = T, quote = T)
+```
+
+
+```{r}
+df_whole_det <- bind_rows(
+  df_pts %>% rename(n=n_pts) %>% mutate(cat="patients"),
+  df_test %>% 
+    group_by(mid_ym, cat_detect) %>% 
+    summarise(n = sum(as.numeric(n_assay))) %>% 
+    rename(cat=cat_detect)
+)
+
+p_whole_det <- ggplot()+theme_pubr(legend = "right")+
+    geom_line(data = df_whole_det,
+            aes(x = mid_ym, y = n, color=cat))
+# p_whole_det
+ggsave2_tri(plot = p_whole_det, wid = w1, hei = h1)
+
+
+f_det <- c("./test_whole_det_", ts, ".csv") %>% 
+  str_c(. ,sep = "", collapse = "")
+f_det
+
+write.csv(df_whole_det, f_det, row.names = T, quote = T)
+
+```
+
+
+```{r}
+df_whole_c2 <- bind_rows(
+  df_pts %>% rename(n=n_pts) %>% mutate(cat="patients"),
+  df_test %>% 
+    group_by(mid_ym, cat2) %>% 
+    summarise(n = sum(as.numeric(n_assay))) %>% 
+    rename(cat=cat2)
+)
+
+
+p_whole_c2 <- ggplot()+theme_pubr(legend = "right")+
+    geom_line(data = df_whole_c2,
+            aes(x = mid_ym, y = n, color=cat))
+# p_whole_c2
+ggsave2_tri(plot = p_whole_c2, wid = w1, hei = h1)
+
+
+f_c2 <- c("./test_whole_c2_", ts, ".csv") %>% 
+  str_c(. ,sep = "", collapse = "")
+f_c2
+
+write.csv(df_whole_c2, f_c2, row.names = T, quote = T)
+
+```
+
+
+```{r}
+p_tes <- ggplot()+theme_pubr(legend = "right")+
+  geom_line(data = df_pts, 
+            aes(x = mid_ym, y = n_pts), color="black")+
+  geom_line(data = df_test,
+            aes(x = mid_ym, y = n_assay, color=v5lab ))
+
+# df_sars %>% 
+#   group_by(V5, prac_act_cd ) %>% 
+#   summarise(n=n())
+# p_tes
+
+
+ggsave2_tri(p_tes, wid = 36, hei = 12)
+
+df_test4out <- df_test %>% 
+  mutate(n_assay = if_else(0 < n_assay & n_assay < 10, "1~9", as.character(n_assay)))
+
+f_test <- c("./test_each_", ts, ".csv") %>% 
+  str_c(. ,sep = "", collapse = "")
+f_test
+
+write.csv(df_test4out, f_test, row.names = T, quote = T)
+
+# df_check <- data.table::fread(f_test)
+```
+
+
+
+
+
+```{r}
+sessionInfo()
+```
+

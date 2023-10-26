@@ -1,0 +1,804 @@
+---
+title: "Ps002_3_create_dpccd"
+author: "fk506cni"
+date: "2023/6/16"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+require(data.table)
+require(DBI)
+require(dbplyr)
+require(RPostgreSQL)
+require(tidyverse)
+require(openxlsx)
+require(DT)
+require(tictoc)
+require(jsonlite)
+require(glue)
+require(parallel)
+
+```
+
+
+
+```{r}
+f_l <- "../dat4all/authdat/sec_l.json"
+f_r <- "../dat4all/authdat/sec.json"
+```
+
+
+```{r}
+f2con <- function(f_json){
+  dic <- jsonlite::read_json(f_json)
+  host <- dic$host
+  port <- dic$port
+  user <- dic$user
+  password <- dic$password
+  dbname <- dic$dbname
+  
+  # dic
+  con <- DBI::dbConnect(RPostgres::Postgres(),
+                        host=host,
+                        port=port,
+                        user=user,
+                        password = password,
+                        dbname=dbname)
+  
+  return(con)
+}
+
+
+f_l <- "../dat4all/authdat/sec_l.json"
+f_r <- "../dat4all/authdat/sec.json"
+lcon <- f2con(f_l)
+rcon <- f2con(f_r)
+```
+
+
+psql -h localhost -U postgres
+create database local_db;
+
+```{r}
+df_grid <- readRDS("../dat4all/masters/ym_grid.rds") %>% 
+  mutate(ym = as.character(ym))
+df_grid %>% 
+  DT::datatable()
+```
+
+
+drug code
+```{r}
+f_y <- "~/dat/tools/20230201/df_y_master_share.xlsx"
+df_y <-read.xlsx(f_y) %>%
+  dplyr::filter(pick_check != 0) %>%
+  mutate(iyakuhin_code = as.character(iyakuhin_code)) %>%
+  mutate(medicine_cd = iyakuhin_code)
+
+drugcode <- df_y$medicine_cd %>%
+  unique()
+
+drugcode
+```
+
+si adm or o2
+```{r}
+
+
+# f_adm <- "../dat4all/masters/si_adm_master_share_20230210_org.xlsx"
+# df_adm_org <- read.xlsx(f_adm)
+# df_adm_org %>% DT::datatable()
+#
+# df_adm <- df_adm_org %>%
+#   filter(pick_check == 1)
+# adm_code <- df_adm$V3
+#
+# adm_code
+
+
+f_o2 <- "../dat4all/masters/si_o2_master_share_20230206_org.xlsx"
+df_o2_org <-read.xlsx(f_o2)
+df_o2_org %>% DT::datatable()
+df_o2 <- df_o2_org %>%
+   filter(pick_check == 1)
+o2_code <- df_o2$V3
+
+
+
+```
+
+si exam
+```{r}
+f_si_whole <- "../../dat/tools/20230227/kikin_si_master_whole_20230223.xlsx"
+df_si <- read.xlsx(f_si_whole) %>%
+  mutate(kubun_head = V91,
+         kubun_body = V92,
+         kubun_tail = V93) %>%
+  select(starts_with("kubun"),ymdtag, everything())
+# lab
+
+df_ex <- df_si %>%
+  filter(str_detect(V5, "ＳＡＲＳ|核酸多項目同時検出|インフルエンザ|ＲＳウイルス|ポリオ|デング|アデノウイルス"))
+
+#   filter()
+df_ex %>% DT::datatable()
+
+excode <- df_ex$V3
+
+
+# df_ct <- df_si %>%
+#   filter(str_detect(V5, "ＣＴ")) %>%
+#   filter(kubun_head == "04") %>%
+#   filter(!str_detect(V5, "減算|脳槽|加算|冠動脈|ポジトロン|外傷|ＦＦＲＣＴ"))
+# # %>%
+#
+# df_ct %>% DT::datatable()
+#   # c("160224050")
+# # xp/ct
+#
+# ctcode <- df_ct$V3
+
+
+
+df_adm <- df_si %>%
+  filter(kubun_head == "02" & kubun_body %in% c("100", "104", "105", "103", "300", "301", "302"))
+  # filter(!V3 %in% o2_code)
+
+# df_adm_e <- df_adm %>%
+#   filter(!V3 %in% df_adm_org$V3)
+
+adm_code <- df_adm$V3
+
+adm_code
+```
+
+si codes
+```{r}
+sicode <- c(adm_code, o2_code, excode) %>%
+  unique()
+sicode
+```
+
+```{r}
+cdcode <- c(drugcode, sicode)
+```
+
+
+```{r}
+
+qq <- function(qfile, params = NULL, con = NULL){
+  q_read <- qfile %>% 
+    read_file() %>% 
+    str_remove(., "^-- !preview conn=con\n") 
+  # print(q_read)
+  if(is.null(params)){
+    return(q_read)
+  }else{
+    params0 <- list(q_read)
+    # params0$x <- q_read
+    params_bind <- append(params0, params)
+    params_bind$.con <- con
+    
+    print(params_bind)
+    
+    # return(params_bind)
+    do.call(glue_sql, params_bind) %>%
+      return()
+  }
+}
+
+  # q_fix <- qq(qfile = q_f, params = arglist, con = con1)
+  # print(q_fix)
+  # res <- dbSendQuery(con1, q_fix)
+  
+# 
+qfa2df <- function(q_f, arglist, con){
+  tic()
+  q_fix <- qq(qfile = q_f, params = arglist, con = con)
+  print(q_fix)
+  res <- dbSendQuery(con, q_fix)
+
+  df_0 <- data.frame()
+  l_df <- list()
+  chunksize <- 1e+4
+  iternum <- 1
+  while(!dbHasCompleted(res)){
+    if(iternum %% 50 == 0){
+      print(iternum)
+    }
+    df_i <- dbFetch(res, n = chunksize)
+    # df_0 <- bind_rows(df_0, df_i)
+    l_df[[iternum]] <- df_i
+    # # l_df <- append(l_df, df_i)
+    iternum <- iternum +1
+  }
+  dbClearResult(res)
+  toc()
+
+  l_df <- bind_rows(l_df)
+  l_df %>%
+    dim() %>%
+    print()
+  return(l_df)
+}
+```
+
+```{r}
+qfa2Ex <- function(f, con, arglist){
+  tic()
+  tb <- arglist$tbl
+  q_fix <- qq(qfile = f, params = arglist, con = con)
+  print(q_fix)
+  
+  dbExecute(conn = con, statement = q_fix)
+  
+  toc()
+}
+```
+
+
+```{r}
+
+# check_col <- function(df, tb, cl){
+#   if()
+# }
+#   
+
+get_ts <- function(){
+  ts <- Sys.time() %>% 
+    as.character() %>% 
+    str_replace_all(" ", "_") %>% 
+    str_replace_all("\\-|:", "")
+  return(ts)
+}
+
+get_ts()
+
+
+
+l_df2psgl <- function(l_df, ym, tb, iternum, con2){
+  
+  #parse dup tag
+  arglist_l <- list()
+  arglist_l$ym <- ym
+  
+  f_si <- "./queries/select_tag_silong.sql"
+  si_tag <- qfa2df(q_f = f_si, arglist = arglist_l, con = con2)
+  f_iy <- "./queries/select_tag_iylong.sql"
+  iy_tag <- qfa2df(q_f = f_iy, arglist = arglist_l, con = con2)
+
+  
+  
+  df <- l_df %>% 
+    dplyr::bind_rows()
+      
+        # data.table::rbindlist()
+  if(nrow(df) == 0){
+    l <- list()
+    l$ym <- ym
+    l$tbl <- tb
+    l$iter <- iternum
+    
+    log_out(i = iternum, l = l,tag = tb, timing = "error_df")
+  }else{
+    df %>% 
+        mutate(qnt_dat_str = if_else(is.na(qnt_dat), "NA", as.character(qnt_dat)),
+            times_str = if_else(is.na(times), "NA", as.character(times)),
+            use_amnt_str = if_else(is.na(use_amnt), "NA", format(use_amnt,nsmall=5)) %>%
+              str_remove_all(" ")) %>%
+        group_by(
+                seq2_no
+                ,rcpt_comp_sys_rec
+                ,qnt_dat_str
+                ,use_amnt_str
+                ,times_str
+                ,prac_ident
+                ,oprtn_ymd
+              ) %>%
+        mutate(groupind = get_ind(seq1_no)) %>%
+        ungroup() %>%
+        mutate(tag = case_when(
+          rcpt_comp_sys_rec %in% drugcode ~
+            str_c(
+                  seq2_no
+                  ,rcpt_comp_sys_rec
+                  ,use_amnt_str
+                  ,times_str
+                  ,oprtn_ymd
+                  ,prac_ident
+                  ,as.character(groupind)
+                  ,sep="_"),
+          rcpt_comp_sys_rec %in% sicode ~
+            str_c(
+                  seq2_no
+                  ,rcpt_comp_sys_rec
+                  ,qnt_dat_str
+                  ,times_str
+                  ,oprtn_ymd
+                  ,prac_ident
+                  ,as.character(groupind)
+                  ,sep="_"),
+          T ~ "unmatched_code"
+          )) %>%
+        mutate(dup_flg_2 = case_when(
+           rcpt_comp_sys_rec %in% drugcode ~
+            if_else(tag %in% iy_tag$tag, 1, 0) %>%
+             as.integer(),
+          rcpt_comp_sys_rec %in% sicode ~
+            if_else(tag %in% si_tag$tag, 1, 0) %>%
+            as.integer(),
+          T ~ as.integer(999)
+        ))  %>% 
+        select(-qnt_dat_str, -times_str, -use_amnt_str) %>% 
+      DBI::dbAppendTable(conn = con2, name = tb, value = ., append=T)
+
+    # saveRDS(l_df, "./temp.rds")
+
+  }
+  
+  rm(l_df, df)
+  gc(reset = T)
+  gc(reset = T)
+  l_df <- list()
+  return(l_df)
+}
+
+qfa2con2df2con <- function(q_f, con1, arglist, con2){
+  tic()
+  tb <- arglist$tbl
+  ym <- arglist$ym
+  
+
+  
+  q_fix <- qq(qfile = q_f, params = arglist, con = con1)
+  print(q_fix)
+  
+  # df <- qfa2df(q_f = q_f, arglist = arglist, con = con1)
+  # df <- df %>% 
+  #   df_filter(df = ., tb = tb)
+  # 
+  # df %>% 
+  #   DBI::dbAppendTable(conn = con2, name = tb, value = ., append=T)
+  #     # df_filter(df = ., tb = tb) %>% 
+  #   # saveRDS(l_df, "./temp.rds")
+  # saveRDS(df, "./temp.rds")
+
+  res <- dbSendQuery(con1, q_fix)
+
+  chunksize <- 1e+4
+  iternum <- 1
+  n_row <- 0
+  l_df <- list()
+
+  while(!dbHasCompleted(res)){
+    if(iternum %% 125 == 0){
+      print(iternum)
+    }
+
+    df_i <- dbFetch(res, n = chunksize)
+    # df_i <- df_i %>%
+    #   mutate(prac_ym = as.character(prac_ym))
+    n_row <- n_row + nrow(df_i)
+    l_df[[iternum]] <- df_i  %>% 
+      df_filter2(df = ., tb = tb)
+
+
+    # if(iternum %% 250 == 0){
+    #   tic()
+    #   c("temp_write:", as.character(iternum)) %>%
+    #     paste(collapse = "") %>%
+    #     print()
+    # 
+    #   l_df <- l_df2psgl(l_df = l_df,ym = ym, tb = tb, iternum = iternum, con2 = con2)
+    # 
+    #   toc()
+    # }
+
+    iternum <- iternum +1
+  }
+  toc()
+  tic()
+
+  l_df <- l_df2psgl(l_df = l_df,ym = ym, tb = tb, iternum = iternum, con2 = con2)
+  dbClearResult(res)
+  
+  endcomment <- c("table:", tb, ", ym:",as.character(ym), ", rownumber:", as.character(n_row)) %>% 
+    str_c(collapse ="")
+  
+  print(endcomment)
+  
+
+  return(endcomment)
+}
+
+
+# qfa2con2df2con(q_f = q_f, con1 = rcon , arglist = arglist, con2 = lcon)
+# 
+# 
+# q_fix <- qq(qfile = q_f, params = arglist, con =rcon)
+# q_fix
+
+```
+
+
+```{r}
+get_ind <- function(x){
+  c(1:length(x))
+}
+
+df_filter2 <- function(df, tb
+                       # ,iy_tag
+                       # ,si_tag
+                       ){
+      ##filter
+  
+  error_file <- c("./error_",tb,"_", get_ts(), ".rds") %>% 
+    str_c(collapse = "")
+  if(str_detect(tb, "_cd")){
+      if(! "rcpt_comp_sys_rec" %in% colnames(df)){
+      saveRDS(df, error_file)
+      }else{
+      df <- df %>% 
+        dplyr::filter(rcpt_comp_sys_rec %in% cdcode) 
+      
+
+      
+    }
+  }
+  
+  return(df)
+}
+```
+
+
+```{r}
+# test_l <- list()
+# test_l$a <- "aa"
+# file_i <- paste("./logdir/", as.character(1),"_", get_ts(), ".json")
+# jsonlite::write_json(x = test_l, path = file_i)
+
+# l_test <- list()
+# is.null(l_test[["ym"]])
+log_out <- function(i,l, tag, timing = NULL){
+  if(is.null(l[["ym"]])){
+    ym <- "9999"
+  }else{
+    ym <- l[["ym"]] %>% 
+      as.character()
+  }
+  if(is.null(timing)){
+    timing <- "start"
+  }
+  
+  path_i <- paste("./logdir/","log_",
+                  as.character(i),"_",
+                  timing, "_",
+                  ym, "_" ,
+                  tag,"_",
+                  get_ts(), ".json", collapse = "")
+  jsonlite::write_json(x = l, path = path_i)
+  
+}
+
+cdcode  %>% is.na() %>% sum()
+# log_out(1, test_l, tag = "aaa")
+```
+
+```{r}
+# arglist <- list()
+# # # # arglist$schm <- "local_db"
+# # arglist$schm <- "osr_ndb_user"
+# # arglist$tbl <- "tnds_t_rcp_whole_id1n"
+# arglist$tbl <- "tnds_t_rcp_dpc_cd"
+# # # 
+# arglist$ym <- "202001"
+# 
+# log_out(i = 0, l = arglist, tag = arglist$tbl)
+```
+
+
+```{r}
+# 
+# f_ <- "./queries/select_cd.sql"
+# df <- qfa2df(q_f = f_ ,arglist = arglist, con = rcon)
+# 
+# 
+# f_si <- "./queries/select_tag_silong.sql"
+# si_tag <- qfa2df(q_f = f_si, arglist = arglist, con = lcon)
+# f_iy <- "./queries/select_tag_iylong.sql"
+# iy_tag <- qfa2df(q_f = f_iy, arglist = arglist, con = lcon)
+# 
+# 
+# 
+# df$qnt_dat %>% 
+#   .[!is.na(.)] %>% 
+#   magrittr::equals(., 0) %>% 
+#   sum()
+# 
+# df$times %>% 
+#   .[!is.na(.)] %>% 
+#   magrittr::equals(., 0) %>% 
+#   sum()
+# 
+# df$use_amnt %>% 
+#   .[!is.na(.)] %>% 
+#   magrittr::equals(., 0) %>% 
+#   sum()
+# 
+# df$prac_ident %>% 
+#   .[!is.na(.)] %>% 
+#   magrittr::equals(., 0) %>% 
+#   sum()
+# 
+# df %>% colnames()
+# 
+# iy_tag %>% head()
+# si_tag %>% head()
+# df_s <- df %>% 
+#    df_filter2(df = ., tb = arglist$tbl) %>% 
+#    mutate(qnt_dat_str = if_else(is.na(qnt_dat), "NA", as.character(qnt_dat)),
+#           times_str = if_else(is.na(times), "NA", as.character(times)),
+#           use_amnt_str = if_else(is.na(use_amnt), "NA", format(use_amnt,nsmall=5)) %>% 
+#             str_remove_all(" ")) %>% 
+#    group_by(
+#           seq2_no
+#           ,rcpt_comp_sys_rec
+#           ,qnt_dat_str
+#           ,use_amnt_str
+#           ,times_str
+#           ,prac_ident
+#           ,oprtn_ymd
+#         ) %>%
+#   mutate(groupind = get_ind(seq1_no)) %>%
+#   ungroup() %>%
+#   mutate(tag = case_when(
+#     rcpt_comp_sys_rec %in% drugcode ~ 
+#       str_c(
+#             seq2_no
+#             ,rcpt_comp_sys_rec
+#             ,use_amnt_str
+#             ,times_str
+#             ,oprtn_ymd
+#             ,prac_ident
+#             ,as.character(groupind)
+#             ,sep="_"),
+#     rcpt_comp_sys_rec %in% sicode ~ 
+#       str_c(
+#             seq2_no
+#             ,rcpt_comp_sys_rec
+#             ,qnt_dat_str
+#             ,times_str
+#             ,oprtn_ymd
+#             ,prac_ident
+#             ,as.character(groupind)
+#             ,sep="_"),
+#     T ~ "unmatched_code"
+#     )) %>% 
+#   mutate(dup_flg_2 = case_when(
+#      rcpt_comp_sys_rec %in% drugcode ~ 
+#       if_else(tag %in% iy_tag$tag, 1, 0) %>% 
+#        as.integer(),
+#     rcpt_comp_sys_rec %in% sicode ~ 
+#       if_else(tag %in% si_tag$tag, 1, 0) %>% 
+#       as.integer(),
+#     T ~ as.integer(999)
+#   ))
+# 
+# 
+# df_s$tag %>% head()
+# # df %>% filter(dup_flg == dup_flg) %>% dim()
+# # # %>%
+# #   df_filter(df = ., tb = arglist$tbl)
+# # #
+# # df %>% summary()
+# 
+# # si_tag$tag %>% 
+# #   head()
+# # iy_tag$tag %>% 
+# #   .[str_detect(., "TM3ALda00Y")]
+# 
+# df_ss <-  df_s %>% 
+#   filter(!is.na(dup_flg)) %>% 
+#   filter(dup_flg != dup_flg_2)
+# 
+# df_ss %>% dim()
+```
+
+
+```{r}
+
+# df_tmp <- readRDS("./temp2.rds")
+# # df_na <- 
+# df %>%
+#   filter(is.na(dup_flg)) %>%
+#   dim()
+# # # 
+# # # nrow(df_na) %% nrow(df)
+# # # df_filter(df = ., tb = tb) %>% 
+# df %>%
+#       DBI::dbAppendTable(conn = lcon, name = "tnds_t_rcp_dpc_cd", value = ., append=T)
+# #  
+# # lcon
+# # df_na %>% dim()
+```
+
+
+
+clear and create table
+```{r}
+f_create <- "./queries/create_cd.sql"
+
+f0_ym <- "../Ps001_create_schema/queries/_partition_ym.sql"
+# f0_index <- "../Ps001_create_schema/queries/_create_index.sql"
+# f0_vac <- "../Ps001_create_schema/queries/_vaccume_schm.sql"
+arglist <- list()
+arglist$schm <- "local_db"
+# arglist$tbl <- "cz"
+# qfa2create(f = f_, con = lcon, arglist = arglist)
+
+#filter for test
+# df <- df %>% 
+f_l <- "../dat4all/authdat/sec_l.json"
+f_r <- "../dat4all/authdat/sec.json"
+lcon <- f2con(f_l)
+rcon <- f2con(f_r)
+tb <- "tnds_t_rcp_dpc_cd"
+arglist$tbl <- tb
+dbExistsTable(conn = lcon, name = tb) %>% 
+  print()
+
+if(dbExistsTable(conn = lcon, name = tb)) {
+  #delete
+  print("deleting!")
+  
+  # fx <- "./queries/drop_table.sql"
+  # qfa2Ex(f = fx, con = lcon, arglist = arglist)
+  dbRemoveTable(conn = lcon, name = tb)
+  # break()
+}
+f <- f_create
+print(f)
+qfa2Ex(f = f, con = lcon,arglist = arglist)
+
+arglist
+
+f <- "../Ps001_create_schema/queries/_partition_ym.sql"
+for(ym in df_grid$ym){
+  print(ym)
+  
+  arglist$ym <- ym
+  arglist$pym <- paste(tb, ym, sep="_")
+  qfa2Ex(f = f, con = lcon,arglist = arglist)
+  
+}
+
+```
+
+
+
+```{r}
+bulkinsertx2 <- function(i){
+  
+  f_l <- "../dat4all/authdat/sec_l.json"
+  f_r <- "../dat4all/authdat/sec.json"
+  lcon <- f2con(f_l)
+  rcon <- f2con(f_r)
+    
+  arglist <- list()
+
+  ym <- df_grid$ym[[i]]
+  tb <- "tnds_t_rcp_dpc_cd"
+  schm <- "osr_ndb_user"
+  f <- "./queries/select_cd.sql"
+
+  arglist$ym <- ym
+  arglist$tbl <- tb
+  arglist$schm <- schm
+  print(arglist)
+
+  log_out(i = i, l = arglist, tag = tb)
+  # df <- qfa2df(q_f = f_ ,arglist = arglist, con = rcon)
+  # # df <- qfa2df(q_f = f ,arglist = arglist, con = rcon)
+  # saveRDS(df, "./temp2.rds")
+  
+  print(f)
+  # print(f_)
+# %>%
+  # print(f)
+  appendval <- qfa2con2df2con(q_f = f, con1 = rcon, arglist = arglist,con2 = lcon)
+  
+  
+  
+  log_out(i = i, l = arglist, tag = tb, timing = "end")
+  # DBI::dbDisconnect(rcon)
+  # DBI::dbDisconnect(lcon)
+  
+  gc(reset = T)
+  gc(reset = T)
+  
+  arglist$appendval <- appendval
+  return(arglist)
+}
+
+# arglist
+# arglist
+# 
+# a2 <- bulkinsertx2(1)
+# a2
+```
+
+```{r}
+# arglist$schm == a2$schm
+# arglist$tbl == a2$tbl
+# arglist$ym == a2$ym
+# a2$ym %>% nchar()
+# arglist$ym %>% nchar()
+# 
+# "20110101" == "20110101"
+```
+
+
+
+```{r}
+
+tic()
+
+xx <- 1:nrow(df_grid)
+# f <- "./queries/select_cd.sql"
+# xx <- 1:nrow(df)
+# %>%
+#   .[1:13]
+cl <- makeCluster(6)
+
+
+clusterEvalQ(cl, {
+  require(data.table)
+  require(DBI)
+  require(RPostgreSQL)
+  require(tidyverse)
+  require(tictoc)
+  require(jsonlite)
+  require(glue)
+
+  })
+
+clusterExport(cl, varlist = c("df", "df_grid", "cdcode", "drugcode", "sicode"), envir = environment())
+clusterExport(cl, varlist = c("f2con", "qfa2Ex", "qq","qfa2con2df2con","get_ts", "df_filter2","log_out", "l_df2psgl", "qfa2df","get_ind"), envir = environment())
+clusterExport(cl, varlist = c("bulkinsertx2"), envir = environment())
+
+clusterEvalQ(cl, bulkinsertx2)
+res <- parSapplyLB(cl = cl,
+                   X = xx,
+                   FUN = bulkinsertx2,
+                   simplify = F,
+                   chunk.size = 1)
+stopCluster(cl)
+toc()
+
+
+
+
+```
+
+```{r}
+# res %>% as.data.frame() %>%
+#   t() %>%
+#   DT::datatable()
+```
+
+
+analyze
+```{r}
+f_anal <- "../Ps001_create_schema/queries/_analyze_schm.sql"
+f_l
+lcon <- f2con(f_json = f_l)
+qfa2Ex(f = f_anal, con = lcon, arglist = list())
+```
+
+
+```{r}
+sessionInfo()
+```
+

@@ -1,0 +1,281 @@
+---
+title: "Ps07_extra_dis_dist_vis"
+author: "fk506cni"
+date: "2023/3/14"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+
+```{r}
+require(tidyverse)
+require(openxlsx)
+require(DT)
+require(tictoc)
+require(data.table)
+require(officer)
+require(lubridate)
+require(ggpubr)
+```
+
+```{r}
+outputdir <- "./figs/"
+if(!dir.exists(outputdir)){
+  dir.create(outputdir)
+}
+
+ggsave2_tri <- function(plot, wid = 9, hei=9){
+  plot_name <- deparse(substitute(plot))
+  
+  #png
+  file_name <- paste(outputdir,plot_name, ".png", sep = "",collapse = "")
+  ggsave(filename = file_name,plot = plot,device = "png",width = wid, height = hei,dpi = 300,units = "cm")
+  
+  
+  #pdf
+  file_name <- paste(outputdir,plot_name, ".pdf", sep = "",collapse = "")
+  ggsave(filename = file_name,plot = plot,device = "pdf",width = wid, height = hei,dpi = 300,units = "cm")
+  
+  #pptx
+  file_name <- paste(outputdir,plot_name, ".pptx", sep = "",collapse = "")
+  plot_ed <- rvg::dml(ggobj = plot,width = wid, height = hei)
+  
+  doc <- read_pptx() %>%
+    add_slide('Title and Content', 'Office Theme') %>%
+    ph_with(value = "", location = ph_location_type(type = "title")) %>%
+    ph_with(value = plot_ed, location = ph_location(type = "body",width = cm2inch(wid), height = cm2inch(hei),left = 2, top = 2))
+  doc %>%
+    print(target = file_name)
+  
+}
+
+ggsave2_tri_tag <- function(plot, tag, wid = 9, hei=9){
+  # plot_name <- deparse(substitute(plot))
+  plot_name <- tag
+  #png
+  file_name <- paste(outputdir,plot_name, ".png", sep = "",collapse = "")
+  ggsave(filename = file_name,plot = plot,device = "png",width = wid, height = hei,dpi = 300,units = "cm")
+  f2metajson(file_name)
+  
+  # #pdf
+  # file_name <- paste(outputdir,plot_name, ".pdf", sep = "",collapse = "")
+  # ggsave(filename = file_name,plot = plot,device = "pdf",width = wid, height = hei,dpi = 300,units = "cm")
+  # f2metajson(file_name)
+  
+  #pptx
+  file_name <- paste(outputdir,plot_name, ".pptx", sep = "",collapse = "")
+  plot_ed <- rvg::dml(ggobj = plot,width = wid, height = hei)
+  
+  doc <- read_pptx() %>%
+    add_slide('Title and Content', 'Office Theme') %>%
+    ph_with(value = "", location = ph_location_type(type = "title")) %>%
+    ph_with(value = plot_ed, location = ph_location(type = "body",width = cm2inch(wid), height = cm2inch(hei),left = 2, top = 2))
+  doc %>%
+    print(target = file_name)
+  f2metajson(file_name)
+  
+}
+
+
+
+
+inch2cm <- function(x){
+  return(x/0.39370)
+}
+cm2inch <- function(x){
+  return(0.39370*x)
+}
+
+p2cm <- function(x){
+  return(as.integer(0.008466666666666667 * x))
+}
+
+cm2p <- function(x){
+  return(as.integer(118.11023622047244 *x))
+}
+
+sv2ggkm <- function(svfit){
+  p <- ggsurvplot(fit = svfit, data = df,
+                risk.table.title = "risk.table.title", risk.table.y.text.col = TRUE,
+           risk.table.y.text = FALSE, fontsize = 5,
+           risk.table = TRUE, tables.theme = theme_pubr(), ggtheme = theme_pubr())
+  p_km <- p$plot
+  p_tb <- p$table
+  p2 <- cowplot::plot_grid(p_km, p_tb, ncol = 1,align = "v", rel_heights = c(3,1))
+  grid::grid.draw(p2)
+  return(p2)
+}
+
+
+f2metajson <- function(f){
+  l <- file.info(f) %>% as.list()
+  l2 <- list()
+  
+  l2 <- list()
+  l_names <- names(l)
+  
+  for (i in 1:length(l)){
+    if(l_names[i] %in% c("uid", "gid", "mode", "uname", "grname")){
+      # print(l_names[i])
+    }else{
+      if("POSIXct" %in% class(l[[i]])){
+        l2[[l_names[i]]] <- l[[i]] %>% 
+          lubridate::ymd_hms() %>% 
+          as.character()
+      }else{
+        l2[[l_names[i]]] <- as.character(l[[i]])
+      }
+    }
+  }
+  
+  l2$f <- f
+  l2$md5 <- f %>% 
+    file(.,open = "rb") %>% 
+    openssl::md5() %>% 
+    as.character() %>% 
+    as.character()
+  l2$sha256 <- f %>% 
+    file(.,open = "rb") %>% 
+    openssl::sha256() %>% 
+    as.character() %>% 
+    as.character()
+  print(l2)
+  f_json <- paste(f, ".json", sep="", collapse = "")
+  jsonlite::write_json(x = l2, path = f_json, pretty=T, auto_unbox=T)
+  # return(l2)
+  # # jsonlite::write_json(x = l2, path = f_json)
+}
+
+
+get_ts <- function(){
+  ts <- Sys.time() %>% 
+    as.character() %>% 
+    str_replace_all(" ", "_") %>% 
+    str_replace_all("\\-|:", "")
+  return(ts)
+}
+
+ts <- get_ts()
+```
+
+```{r}
+# f_rds <- "./several_dis_res_20230316_105927.rds"
+f_rds <- "./several_dis_res_20230616_055652.rds"
+df <- readRDS(f_rds) %>% 
+  bind_rows()
+# %>%
+
+df %>% colnames() %>% 
+  str_c(collapse = ",")
+df <- df %>%
+  dplyr::select(-file) %>% 
+  filter(sex_mean != 0) %>% 
+  tidyr::complete(had_dis_bool,yms, dis,age_hier_cd1_int_min,sex_mean,
+                  fill = list(unique_id1n_count = 0)) %>% 
+  mutate(mid_ym = str_c(yms, "15", sep="") %>% 
+           lubridate::ymd(),
+         unique_id1n_count = as.numeric(unique_id1n_count)
+         ) %>% 
+  mutate(with_infection = ifelse(had_dis_bool > 0, "W/I", "without"),
+         age_ = as.numeric(age_hier_cd1_int_min),
+         age_grade = case_when(
+           age_ <= 102 ~ "young",
+           age_ <= 112 ~ "adult",
+           age_ <= 116 ~ "elder",
+           T ~ "other")) %>% 
+  arrange(-age_) %>% 
+  mutate(age_grade = factor(age_grade, levels = unique(age_grade))) %>% 
+  filter(had_dis_bool == 1) %>% 
+  group_by(age_grade, with_infection, dis,mid_ym) %>% 
+  summarise(n=sum(unique_id1n_count))
+  # mutate(with_infection = ifelse(had_dis_bool > 0, "W/I", "without"),
+  #        # log2_count_of_covid = log2(count_of_covid +1),
+  #        gender= ifelse(sex_mean <=1.5, "male", "female"),
+  #        age_ = as.numeric(age_hier_cd1_int_min),
+  #        age_ = case_when(
+  #            age_==100 ~"0~4",
+  #            age_==101 ~"5~9",
+  #            age_==102 ~"10~14",
+  #            age_==103 ~"15~19",
+  #            age_==104 ~"20~24",
+  #            age_==105 ~"25~29",
+  #            age_==106 ~"30~34",
+  #            age_==107 ~"35~39",
+  #            age_==108 ~"40~44",
+  #            age_==109 ~"45~49",
+  #            age_==110 ~"50~54",
+  #            age_==111 ~"55~59",
+  #            age_==112 ~"60~64",
+  #            age_==113 ~"65~69",
+  #            age_==114 ~"70~74",
+  #            age_==115 ~"75~79",
+  #            age_==116 ~"80~",
+  #            T ~ "nonmatch"
+  #          )) %>% 
+  # arrange( as.numeric(age_hier_cd1_int_min)) %>% 
+  # mutate(age_ = factor(age_, levels = unique(age_)))
+
+```
+
+
+```{r}
+dis_codes <- df$dis %>% 
+  unique()
+dis_codes
+
+```
+
+
+```{r}
+require(ggpubr)
+
+for(dis_code in dis_codes){
+  # print(dis)
+  dis_tag <- c(dis_code, ts) %>% 
+    str_c(collapse = "_")
+  print(dis_tag)
+  df_i <- df %>% 
+    filter(dis == dis_code) 
+  
+  p <- ggplot()+theme_pubr()+
+    geom_line(data = df_i,
+              aes(x=mid_ym, y=n,color=age_grade))+
+    ggtitle(dis_code)
+  
+  # grid::grid.draw(p)
+  
+  ggsave2_tri_tag(plot = p, tag = dis_tag, wid = 15, hei = 9)
+}
+```
+
+
+```{r}
+p3 <- ggplot()+theme_pubr()+
+    geom_line(data = df,
+              aes(x=mid_ym, y=n,color=age_grade))+
+    xlab("")+ylab("")+
+    facet_wrap(~dis,ncol = 1, scales = "free")
+# p3
+
+tag_p3 <- c("dis3", ts) %>% 
+  str_c(collapse = "_")
+
+ggsave2_tri_tag(plot = p3, tag = tag_p3, wid = 12, hei = 18)
+```
+
+```{r}
+f_csv <- c("./figs/dis_dist_", ts, ".csv") %>% 
+  str_c(collapse = "")
+
+df %>% write.csv(x = ., file = f_csv, quote = T, row.names = T)
+
+df_text <- data.table::fread(f_csv)
+```
+
+
+
+```{r}
+sessionInfo()
+```
+

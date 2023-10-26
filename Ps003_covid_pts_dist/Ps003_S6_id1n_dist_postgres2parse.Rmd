@@ -1,0 +1,406 @@
+---
+title: "Ps003_S6_id1n_dist_postgres2parse"
+author: "fk506cni"
+date: "2023/6/1"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+
+```{r}
+require(DBI)
+# require(dbplyr)
+require(RPostgreSQL)
+require(tidyverse)
+require(openxlsx)
+require(DT)
+require(tictoc)
+require(jsonlite)
+require(glue)
+# require(parallel)
+
+require(officer)
+```
+
+
+```{r}
+outputdir <- "./figs/"
+if(!dir.exists(outputdir)){
+  dir.create(outputdir)
+}
+
+ggsave2_tri <- function(plot, wid = 9, hei=9){
+  plot_name <- deparse(substitute(plot))
+  
+  #png
+  file_name <- paste(outputdir,plot_name, ".png", sep = "",collapse = "")
+  ggsave(filename = file_name,plot = plot,device = "png",width = wid, height = hei,dpi = 300,units = "cm")
+  f2metajson(file_name)
+  
+  #pdf
+  # file_name <- paste(outputdir,plot_name, ".pdf", sep = "",collapse = "")
+  # ggsave(filename = file_name,plot = plot,device = "pdf",width = wid, height = hei,dpi = 300,units = "cm")
+  # f2metajson(file_name)
+  
+  #pptx
+  file_name <- paste(outputdir,plot_name, ".pptx", sep = "",collapse = "")
+  plot_ed <- rvg::dml(ggobj = plot,width = wid, height = hei)
+  
+  doc <- read_pptx() %>%
+    add_slide('Title and Content', 'Office Theme') %>%
+    ph_with(value = "", location = ph_location_type(type = "title")) %>%
+    ph_with(value = plot_ed, location = ph_location(type = "body",width = cm2inch(wid), height = cm2inch(hei),left = 2, top = 2))
+  doc %>%
+    print(target = file_name)
+  f2metajson(file_name)
+  
+}
+
+
+
+inch2cm <- function(x){
+  return(x/0.39370)
+}
+cm2inch <- function(x){
+  return(0.39370*x)
+}
+
+p2cm <- function(x){
+  return(as.integer(0.008466666666666667 * x))
+}
+
+cm2p <- function(x){
+  return(as.integer(118.11023622047244 *x))
+}
+
+sv2ggkm <- function(svfit){
+  p <- ggsurvplot(fit = svfit, data = df,
+                risk.table.title = "risk.table.title", risk.table.y.text.col = TRUE,
+           risk.table.y.text = FALSE, fontsize = 5,
+           risk.table = TRUE, tables.theme = theme_pubr(), ggtheme = theme_pubr())
+  p_km <- p$plot
+  p_tb <- p$table
+  p2 <- cowplot::plot_grid(p_km, p_tb, ncol = 1,align = "v", rel_heights = c(3,1))
+  grid::grid.draw(p2)
+  return(p2)
+}
+
+
+f2metajson <- function(f){
+  l <- file.info(f) %>% as.list()
+  l2 <- list()
+  
+  
+  l_names <- names(l)
+  
+  for (i in 1:length(l)){
+    if(l_names[i] %in% c("uid", "gid", "mode", "uname", "grname")){
+      # print(l_names[i])
+    }else{
+      if("POSIXct" %in% class(l[[i]])){
+        l2[[l_names[i]]] <- l[[i]] %>% 
+          lubridate::ymd_hms() %>% 
+          as.character()
+      }else{
+        l2[[l_names[i]]] <- as.character(l[[i]])
+      }
+    }
+  }
+  
+  l2$f <- f
+  l2$md5 <- f %>% 
+    file(.,open = "rb") %>% 
+    openssl::md5() %>% 
+    as.character() %>% 
+    as.character()
+  l2$sha256 <- f %>% 
+    file(.,open = "rb") %>% 
+    openssl::sha256() %>% 
+    as.character() %>% 
+    as.character()
+  print(l2)
+  f_json <- paste(f, ".json", sep="", collapse = "")
+  jsonlite::write_json(x = l2, path = f_json, pretty=T, auto_unbox=T)
+  # return(l2)
+  # # jsonlite::write_json(x = l2, path = f_json)
+}
+```
+
+
+```{r}
+f_l <- "../dat4all/authdat/sec_l.json"
+f_r <- "../dat4all/authdat/sec.json"
+```
+
+
+```{r}
+f2con <- function(f_json){
+  dic <- jsonlite::read_json(f_json)
+  host <- dic$host
+  port <- dic$port
+  user <- dic$user
+  password <- dic$password
+  dbname <- dic$dbname
+  
+  # dic
+  con <- DBI::dbConnect(RPostgres::Postgres(),
+                        host=host,
+                        port=port,
+                        user=user,
+                        password = password,
+                        dbname=dbname)
+  
+  return(con)
+}
+
+
+f_l <- "../dat4all/authdat/sec_l.json"
+# f_r <- "../dat4all/authdat/sec.json"
+lcon <- f2con(f_l)
+# lcon2 <- f2con(f_l)
+# rcon <- f2con(f_r)
+```
+
+```{r}
+
+qq <- function(qfile, params = NULL, con = NULL){
+  q_read <- qfile %>% 
+    read_file() %>% 
+    str_remove(., "^-- !preview conn=con\n") 
+  # print(q_read)
+  if(is.null(params)){
+    return(q_read)
+  }else{
+    params0 <- list(q_read)
+    # params0$x <- q_read
+    params_bind <- append(params0, params)
+    params_bind$.con <- con
+    
+    print(params_bind)
+    
+    # return(params_bind)
+    do.call(glue_sql, params_bind) %>%
+      return()
+  }
+}
+
+```
+
+```{r}
+qfa2Ex <- function(f, con, arglist){
+  tic()
+  tb <- arglist$tbl
+  q_fix <- qq(qfile = f, params = arglist, con = con)
+  print(q_fix)
+  
+  dbExecute(conn = con, statement = q_fix)
+  
+  toc()
+}
+```
+
+
+```{r}
+# check_col <- function(df, tb, cl){
+#   if()
+# }
+#   
+
+get_ts <- function(){
+  ts <- Sys.time() %>% 
+    as.character() %>% 
+    str_replace_all(" ", "_") %>% 
+    str_replace_all("\\-|:", "")
+  return(ts)
+}
+
+log_out <- function(i,l, tag, timing = NULL){
+  if(is.null(l[["ym"]])){
+    ym <- "9999"
+  }else{
+    ym <- l[["ym"]] %>% 
+      as.character()
+  }
+  if(is.null(timing)){
+    timing <- "start"
+  }
+  
+  path_i <- paste("./logdir/","log_",
+                  as.character(i),"_",
+                  timing, "_",
+                  ym, "_" ,
+                  tag,"_",
+                  get_ts(), ".json", collapse = "")
+  jsonlite::write_json(x = l, path = path_i)
+  
+}
+
+get_ts()
+
+df_filter <- function(df, tb){
+      ##filter
+  
+  error_file <- c("./error_",tb,"_", get_ts(), ".rds") %>% 
+    str_c(collapse = "")
+  if(str_detect(tb, "_si$")){
+    
+    if(! "prac_act_cd" %in% colnames(df)){
+      saveRDS(df, error_file)
+    }else{
+      df <- df %>% 
+        filter(prac_act_cd %in% sicode)
+    }
+    
+  }else if(str_detect(tb, "_iy$")){
+    
+    if(! "medicine_cd" %in% colnames(df)){
+      saveRDS(df, error_file)
+    }else{
+      df <- df %>% 
+        filter(medicine_cd %in% drugcode)
+    }
+    
+  }else if(str_detect(tb, "_sy$|_sb$")){
+    
+    if(! "skwd_name_cd" %in% colnames(df)){
+      saveRDS(df, error_file)
+    }else{
+      df <- df %>% 
+      filter(skwd_name_cd %in% discode)
+    }
+    
+  }
+  
+  return(df)
+}
+
+
+```
+
+```{r}
+qfa2df <- function(q_f, arglist, con){
+  tic()
+  q_fix <- qq(qfile = q_f, params = arglist, con = con)
+  print(q_fix)
+  res <- dbSendQuery(con, q_fix)
+  
+  df_0 <- data.frame()
+  l_df <- list()
+  chunksize <- 1e+4
+  iternum <- 1
+  while(!dbHasCompleted(res)){
+    if(iternum %% 50 == 0){
+      print(iternum)
+    }
+    df_i <- dbFetch(res, n = chunksize)
+    # df_0 <- bind_rows(df_0, df_i)
+    l_df[[iternum]] <- df_i
+    # # l_df <- append(l_df, df_i)
+    iternum <- iternum +1
+  }
+  dbClearResult(res)
+  toc()
+  
+  l_df <- bind_rows(l_df)
+  l_df %>% 
+    dim() %>% 
+    print()
+  return(l_df)
+}
+```
+
+
+```{r}
+arglist <- list()
+# arglist$ym <- "202001"
+# arglist$schm <- "osr_ndb_user"
+arglist$schm <- "local_db"
+arglist$tbl <- "tnds_t_rcp_whole_id1n"
+# tnds_t_rcp_whole_id1n
+# arglist$tbl <- "tnds_t_rcp_pha_iy"
+# f <- "../Ps001_create_schema/queries/select_ho.sql"
+f <- "./queries/covid_id_smr_id1_dist.sql"
+df <- qfa2df(q_f = f, arglist = arglist, con = lcon)
+
+# df$id1n_count %>% sum()
+# df_head <- df %>% head()
+# df_head
+```
+
+
+there are 3 person unknwon gender(sex_mean is 0).
+The there are excluded.
+
+```{r}
+df_smr_a_i_g <- df %>% 
+  rename(count_of_covid=had_covid_bool,
+         gender=sex_mean, 
+         age_at_first=age_hier_cd1_int_min,
+         n= id1n_count) %>% 
+  filter(gender %in% c(1,2)) %>% 
+  mutate(count_of_covid = ifelse(count_of_covid >0,1, 0)) %>% 
+  group_by(count_of_covid, gender, age_at_first) %>% 
+  summarise(n=sum(n)) %>%
+  mutate(n=as.numeric(n),
+         count_of_covid = as.numeric(count_of_covid), 
+         covid_infection = ifelse(count_of_covid >0, "withCovidCode", "without"),
+         # log2_count_of_covid = log2(count_of_covid +1),
+         gender= ifelse(gender <=1.5, "male", "female"),
+         age_at_first= as.numeric(age_at_first),
+         age_ = age_at_first,
+         age_ = case_when(
+             age_==100 ~"0~4",
+             age_==101 ~"5~9",
+             age_==102 ~"10~14",
+             age_==103 ~"15~19",
+             age_==104 ~"20~24",
+             age_==105 ~"25~29",
+             age_==106 ~"30~34",
+             age_==107 ~"35~39",
+             age_==108 ~"40~44",
+             age_==109 ~"45~49",
+             age_==110 ~"50~54",
+             age_==111 ~"55~59",
+             age_==112 ~"60~64",
+             age_==113 ~"65~69",
+             age_==114 ~"70~74",
+             age_==115 ~"75~79",
+             age_==116 ~"80~",
+             T ~ "nonmatch"
+           )) %>% 
+  arrange(age_at_first) %>% 
+  mutate(age_ = factor(age_, levels = unique(age_)))
+
+
+df_smr<- df %>% group_by(had_covid_bool) %>% 
+  summarise(n=sum(id1n_count))
+
+require(ggpubr)
+p_fm_dist <- ggplot()+theme_pubr()+
+  geom_bar(data = df_smr_a_i_g,
+           aes(x=age_, y=n, fill = covid_infection),
+           stat="identity")+
+  facet_wrap(~gender, ncol = 2)+
+  coord_flip()
+# p_fm_dist
+
+
+ggsave2_tri(p_fm_dist, wid=18, hei=14)
+
+```
+
+```{r}
+f_out <- c("./covid_dist_smr_whole", get_ts(), ".csv") %>% 
+  str_c(collapse = "")
+f_out
+write.csv(x = df_smr_a_i_g, f_out, quote = T, sep = ",", row.names = T, col.names =T)
+
+# df_tex <- data.table::fread(f_out)
+```
+
+
+```{r}
+sessionInfo()
+```
+
